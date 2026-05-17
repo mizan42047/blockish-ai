@@ -1,4 +1,4 @@
-import express from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import pool from "db.js";
 import morgan from "morgan";
@@ -8,59 +8,69 @@ import {
   deleteDocument,
   getDocumentBySourceId,
   getDocuments,
+  type GetDocumentsOptions,
   upsertDocument,
   upsertDocumentsBatch,
 } from "routes/document.ropository.js";
 import { deleteOption, upsertOption } from "routes/options.repository.js";
-import { assistantCallback } from "routes/assistant.routes.js";
+import {
+  getBlockSuggestions,
+  type GetBlockSuggestionsOptions,
+} from "routes/block-suggestions.repository.js";
+import { assistantCallback } from "agent/callbacks/assistant.callback.js";
+import {
+  requireDocumentSourceId,
+  requireDocumentsPayload,
+  requireSourceIdsPayload,
+} from "middlewares/document.middleware.js";
+import type {
+  GetDocumentsQuery,
+  GetBlockSuggestionsQuery,
+  NormalizedDocument,
+  NormalizedDocumentOk,
+} from "types.js";
+import { isNonEmptyString, parseDate, parseNumber } from "utils.js";
 
-type DocumentInputPayload = {
-  source_id: string;
-  title: string;
-  content: string;
-  category: string;
-  metadata?: any;
-  embedding?: number[] | null;
-};
+class AppServer {
+  private readonly app: Express;
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+  constructor() {
+    this.app = express();
+    this.registerMiddleware();
+    this.registerRoutes();
+  }
 
-function parseCsv(value: unknown): string[] | undefined {
-  if (!isNonEmptyString(value)) return undefined;
-  const items = value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-}
+  public getApp() {
+    return this.app;
+  }
 
-function parseNumber(value: unknown): number | undefined {
-  if (!isNonEmptyString(value)) return undefined;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : undefined;
-}
+  private registerMiddleware() {
+    this.app.use(express.json({ limit: "8mb" }));
+    this.app.use(cors({ origin: "*" }));
+    this.app.use(morgan("dev"));
+    this.app.use(helmet());
+  }
 
-function parseDate(value: unknown): Date | undefined {
-  if (!isNonEmptyString(value)) return undefined;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? undefined : d;
-}
+  private registerRoutes() {
+    this.app.get("/health", this.healthCallback);
+    this.app.get("/test-db", this.testDbCallback);
+    this.app.post("/assistant", assistantCallback);
+    this.app.get("/block-suggestions", this.getBlockSuggestionsCallback);
+    this.app.get("/documents", this.getDocumentsCallback);
+    this.app.get("/documents/:sourceId", this.getDocumentCallback);
+    this.app.post("/documents", requireDocumentSourceId, this.upsertDocumentCallback);
+    this.app.post("/documents/batch", requireDocumentsPayload, this.upsertDocumentsBatchCallback);
+    this.app.delete("/documents/:sourceId", this.deleteDocumentCallback);
+    this.app.delete("/documents/batch", requireSourceIdsPayload, this.deleteDocumentsBatchCallback);
+    this.app.put("/options/:optionKey", this.upsertOptionCallback);
+    this.app.delete("/options/:optionKey", this.deleteOptionCallback);
+  }
 
-export function createServer() {
-  const app = express();
-
-  app.use(express.json());
-  app.use(cors({ origin: "*" }));
-  app.use(morgan("dev"));
-  app.use(helmet());
-
-  app.get("/health", (_req, res) => {
+  private healthCallback = (_req: Request, res: Response) => {
     res.json({ ok: true });
-  });
+  };
 
-  app.get("/test-db", async (req, res) => {
+  private testDbCallback = async (_req: Request, res: Response) => {
     try {
       const result = await pool.query("SELECT * FROM documents");
       res.json({
@@ -70,59 +80,98 @@ export function createServer() {
     } catch (error) {
       res.status(500).json({ error: "Table not found" });
     }
-  });
+  };
 
-  app.post("/assistant", assistantCallback);
-
-  app.get("/documents", async (req, res) => {
+  private getDocumentsCallback = async (
+    req: Request<{}, unknown, unknown, GetDocumentsQuery>,
+    res: Response
+  ) => {
     try {
-      const docs = await getDocuments({
-        category: isNonEmptyString(req.query.category)
-          ? req.query.category
+      const query = req.query;
+
+      const getDocumentsOptions: GetDocumentsOptions = {
+        category: query.category,
+        sourceIds: query.sourceIds,
+        search: query.search,
+        updatedAfter: parseDate(query.updatedAfter),
+        updatedBefore: parseDate(query.updatedBefore),
+        limit: parseNumber(query.limit),
+        offset: parseNumber(query.offset),
+        orderBy: query.orderBy === "created_at" || query.orderBy === "updated_at"
+          ? query.orderBy
           : undefined,
-        sourceIds: parseCsv(req.query.sourceIds),
-        search: isNonEmptyString(req.query.search) ? req.query.search : undefined,
-        updatedAfter: parseDate(req.query.updatedAfter),
-        updatedBefore: parseDate(req.query.updatedBefore),
-        limit: parseNumber(req.query.limit),
-        offset: parseNumber(req.query.offset),
-        orderBy:
-          req.query.orderBy === "created_at" || req.query.orderBy === "updated_at"
-            ? req.query.orderBy
-            : undefined,
-        order:
-          req.query.order === "asc" || req.query.order === "desc"
-            ? req.query.order
-            : undefined,
-      });
+        order: query.order === "asc" || query.order === "desc"
+          ? query.order
+          : undefined,
+      };
+
+      const docs = await getDocuments(getDocumentsOptions);
 
       res.json({ ok: true, data: docs });
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to fetch documents" });
     }
-  });
+  };
 
-  app.get("/documents/:sourceId", async (req, res) => {
+  private getBlockSuggestionsCallback = async (
+    req: Request<{}, unknown, unknown, GetBlockSuggestionsQuery>,
+    res: Response
+  ) => {
     try {
-      const doc = await getDocumentBySourceId(req.params.sourceId);
+      const query = req.query;
+      const options: GetBlockSuggestionsOptions = {
+        limit: parseNumber(query.limit),
+        offset: parseNumber(query.offset),
+        order: query.order === "asc" || query.order === "desc"
+          ? query.order
+          : undefined,
+        orderBy:
+          query.orderBy === "mention_count" ||
+          query.orderBy === "updated_at" ||
+          query.orderBy === "created_at"
+            ? query.orderBy
+            : undefined,
+        priority: query.priority,
+        search: query.search,
+        sourceAgent: query.sourceAgent,
+      };
+
+      const suggestions = await getBlockSuggestions(options);
+
+      res.json({ ok: true, data: suggestions });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: "Failed to fetch block suggestions",
+      });
+    }
+  };
+
+  private getDocumentCallback = async (
+    req: Request<{ sourceId: string }>,
+    res: Response
+  ) => {
+    try {
+      const doc = await getDocumentBySourceId(Number(req.params.sourceId));
       if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
       res.json({ ok: true, data: doc });
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to fetch document" });
     }
-  });
+  };
 
-  app.post("/documents", async (req, res) => {
+  private upsertDocumentCallback = async (req: Request, res: Response) => {
     try {
-      const { source_id, title, content, category, metadata, embedding } =
-        req.body ?? {};
+      const {
+        source_id: sourceId,
+        title,
+        content,
+        category,
+        metadata,
+        embedding,
+      } = req.body ?? {};
 
-      if (!isNonEmptyString(source_id)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "source_id is required" });
-      }
-
+      const source_id = Number(sourceId);
       const existing = await getDocumentBySourceId(source_id);
       const isCreate = !existing;
 
@@ -173,12 +222,8 @@ export function createServer() {
       const finalTitle = isNonEmptyString(title) ? title : existing?.title;
       const finalContent = isNonEmptyString(content) ? content : existing?.content;
       const finalCategory = isNonEmptyString(category) ? category : existing?.category;
-      const finalMetadata = Object.prototype.hasOwnProperty.call(body, "metadata")
-        ? metadata
-        : existing?.metadata ?? {};
-      const finalEmbedding = Object.prototype.hasOwnProperty.call(body, "embedding")
-        ? embedding
-        : existing?.embedding ?? null;
+      const finalMetadata = Object.prototype.hasOwnProperty.call(body, "metadata") ? metadata : existing?.metadata ?? {};
+      const finalEmbedding = Object.prototype.hasOwnProperty.call(body, "embedding") ? embedding : existing?.embedding ?? null;
 
       if (
         !isNonEmptyString(finalTitle) ||
@@ -204,44 +249,21 @@ export function createServer() {
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to upsert document" });
     }
-  });
+  };
 
-  app.post("/documents/batch", async (req, res) => {
+  private upsertDocumentsBatchCallback = async (req: Request, res: Response) => {
     try {
-      const docs = Array.isArray(req.body) ? req.body : req.body?.documents;
-      if (!Array.isArray(docs)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Expected an array of documents" });
-      }
-
-      const sourceIds = docs
-        .map((d) => d?.source_id)
-        .filter(isNonEmptyString) as string[];
-
-      if (sourceIds.length !== docs.length) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Each document must include source_id" });
-      }
+      const docs = (Array.isArray(req.body) ? req.body : req.body?.documents) as Array<Record<string, any>>;
+      const sourceIds = docs.map((document) => Number(document.source_id));
 
       const existingDocs = await getDocuments({ sourceIds: [...new Set(sourceIds)] });
       const existingBySourceId = new Map(
-        existingDocs.map((d) => [d.source_id, d] as const)
+        existingDocs.map((document) => [document.source_id, document] as const)
       );
 
-      type NormalizedOk = { ok: true; data: DocumentInputPayload };
-      type NormalizedErr = { ok: false; source_id: string; error: string };
-
-      const normalizedDocs: Array<NormalizedOk | NormalizedErr> = docs.map((doc) => {
-        const {
-          source_id,
-          title,
-          content,
-          category,
-          metadata,
-          embedding,
-        } = doc ?? {};
+      const normalizedDocs: NormalizedDocument[] = docs.map((doc) => {
+        const { title, content, category, metadata, embedding } = doc ?? {};
+        const source_id = Number(doc.source_id);
 
         const existing = existingBySourceId.get(source_id);
         const isCreate = !existing;
@@ -296,15 +318,9 @@ export function createServer() {
 
         const finalTitle = isNonEmptyString(title) ? title : existing.title;
         const finalContent = isNonEmptyString(content) ? content : existing.content;
-        const finalCategory = isNonEmptyString(category)
-          ? category
-          : existing.category;
-        const finalMetadata = Object.prototype.hasOwnProperty.call(doc, "metadata")
-          ? metadata
-          : existing.metadata ?? {};
-        const finalEmbedding = Object.prototype.hasOwnProperty.call(doc, "embedding")
-          ? embedding
-          : existing.embedding ?? null;
+        const finalCategory = isNonEmptyString(category) ? category : existing.category;
+        const finalMetadata = Object.prototype.hasOwnProperty.call(doc, "metadata") ? metadata : existing.metadata ?? {};
+        const finalEmbedding = Object.prototype.hasOwnProperty.call(doc, "embedding") ? embedding : existing.embedding ?? null;
 
         return {
           ok: true as const,
@@ -319,63 +335,60 @@ export function createServer() {
         };
       });
 
-      const errors = normalizedDocs.filter((d) => !d.ok);
+      const errors = normalizedDocs.filter((document) => !document.ok);
       if (errors.length) {
         return res.status(400).json({
           ok: false,
           error: "Invalid documents in batch",
-          details: errors.map((e) => ({ source_id: e.source_id, error: e.error })),
+          details: errors.map((error) => ({ source_id: error.source_id, error: error.error })),
         });
       }
 
-      const okDocs = normalizedDocs.filter((d): d is NormalizedOk => d.ok);
-      const rows = await upsertDocumentsBatch(
-        okDocs.map((d) => d.data)
+      const okDocs = normalizedDocs.filter(
+        (document): document is NormalizedDocumentOk => document.ok
       );
+      const rows = await upsertDocumentsBatch(okDocs.map((document) => document.data));
       res.json({ ok: true, data: rows });
     } catch (error) {
       res
         .status(500)
         .json({ ok: false, error: "Failed to upsert documents batch" });
     }
-  });
+  };
 
-  app.delete("/documents/:sourceId", async (req, res) => {
+  private deleteDocumentCallback = async (
+    req: Request<{ sourceId: string }>,
+    res: Response
+  ) => {
     try {
-      const deleted = await deleteDocument(req.params.sourceId);
+      const deleted = await deleteDocument(Number(req.params.sourceId));
       if (!deleted)
         return res.status(404).json({ ok: false, error: "Not found" });
       res.json({ ok: true, data: deleted });
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to delete document" });
     }
-  });
+  };
 
-  app.delete("/documents/batch", async (req, res) => {
+  private deleteDocumentsBatchCallback = async (req: Request, res: Response) => {
     try {
-      const sourceIds = Array.isArray(req.body)
-        ? req.body
-        : req.body?.sourceIds;
-      if (!Array.isArray(sourceIds)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Expected sourceIds: string[]" });
-      }
-
-      const deleted = await deleteBatchDocuments(sourceIds);
+      const sourceIds = (Array.isArray(req.body) ? req.body : req.body?.sourceIds) as number[];
+      const deleted = await deleteBatchDocuments(sourceIds.map(Number));
       res.json({ ok: true, data: deleted });
     } catch (error) {
       res
         .status(500)
         .json({ ok: false, error: "Failed to delete documents batch" });
     }
-  });
+  };
 
-  app.put("/options/:optionKey", async (req, res) => {
+  private upsertOptionCallback = async (
+    req: Request<{ optionKey: string }>,
+    res: Response
+  ) => {
     try {
       const option_key = req.params.optionKey;
-      const option_value =
-        req.body?.option_value !== undefined ? req.body.option_value : req.body?.value;
+      const option_value = req.body?.option_value !== undefined ? req.body.option_value : req.body?.value;
 
       if (!isNonEmptyString(option_key)) {
         return res
@@ -393,9 +406,12 @@ export function createServer() {
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to upsert option" });
     }
-  });
+  };
 
-  app.delete("/options/:optionKey", async (req, res) => {
+  private deleteOptionCallback = async (
+    req: Request<{ optionKey: string }>,
+    res: Response
+  ) => {
     try {
       const deleted = await deleteOption(req.params.optionKey);
       if (!deleted)
@@ -404,7 +420,9 @@ export function createServer() {
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to delete option" });
     }
-  });
+  };
+}
 
-  return app;
+export function createServer() {
+  return new AppServer().getApp();
 }

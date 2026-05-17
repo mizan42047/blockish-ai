@@ -1,7 +1,7 @@
 import pool from "db.js";
 
 type DocumentInput = {
-  source_id: string;
+  source_id: number;
   title: string;
   content: string;
   category: string;
@@ -11,7 +11,7 @@ type DocumentInput = {
 
 type DocumentRow = {
   id: number;
-  source_id: string;
+  source_id: number;
   title: string;
   content: string;
   category: string;
@@ -23,7 +23,7 @@ type DocumentRow = {
 
 export type GetDocumentsOptions = {
   category?: string;
-  sourceIds?: string[];
+  sourceIds?: number[];
   search?: string;
   updatedAfter?: Date;
   updatedBefore?: Date;
@@ -67,8 +67,8 @@ export async function upsertDocumentsBatch(docs: DocumentInput[]) {
   const values: any[] = [];
   const placeholders: string[] = [];
 
-  docs.forEach((doc, i) => {
-    const base = i * 6;
+  docs.forEach((doc, index) => {
+    const base = index * 6;
 
     placeholders.push(
       `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`
@@ -169,7 +169,7 @@ export async function getDocuments(
 }
 
 export async function getDocumentBySourceId(
-  sourceId: string
+  sourceId: number
 ): Promise<DocumentRow | null> {
   const result = await pool.query(
     `
@@ -184,8 +184,24 @@ export async function getDocumentBySourceId(
   return result.rows[0] ?? null;
 }
 
+export async function getDocumentByTitle(
+  title: string
+): Promise<DocumentRow | null> {
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM documents
+    WHERE title = $1
+    LIMIT 1;
+    `,
+    [title]
+  );
+
+  return result.rows[0] ?? null;
+}
+
 export async function deleteDocument(
-  sourceId: string
+  sourceId: number
 ): Promise<DocumentRow | null> {
   const result = await pool.query(
     `
@@ -200,14 +216,14 @@ export async function deleteDocument(
 }
 
 export async function deleteBatchDocuments(
-  sourceIds: string[]
+  sourceIds: number[]
 ): Promise<DocumentRow[]> {
   if (!sourceIds.length) return [];
 
   const result = await pool.query(
     `
     DELETE FROM documents
-    WHERE source_id = ANY($1::text[])
+    WHERE source_id = ANY($1::integer[])
     RETURNING *;
     `,
     [sourceIds]
