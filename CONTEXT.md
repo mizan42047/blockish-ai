@@ -24,6 +24,10 @@ There is no frontend in this repository.
 ## Required Environment
 
 - `DATABASE_URL` is required.
+- `AI_PROVIDER` selects the active model provider. Supported values: `gemini` and `openrouter`.
+- The selected provider's API key is required:
+  - `GEMINI_API_KEY` for `AI_PROVIDER=gemini`
+  - `OPENROUTER_API_KEY` for `AI_PROVIDER=openrouter`
 - `PORT` is optional and defaults to `3000`.
 Example local database from `docker-compose.yml`:
 
@@ -207,7 +211,6 @@ Errors generally use:
 
 Accepted body fields:
 
-- `apiKey: string`
 - `message?: string`
 - `input?: string`
 - `messages?: Array<{ role: "user" | "assistant" | "system"; content: string }>`
@@ -217,16 +220,16 @@ Accepted body fields:
 
 Behavior:
 
-- Requires `apiKey` in the request body.
+- Requires the selected provider API key in the backend environment.
 - Runs the Product Manager first. When the model returns a DeepAgents `task` function call for the designer instead of completing the nested run, the callback completes the workflow itself:
   - run designer from the ready product brief,
-  - run developer from the brief and design guide,
-  - parse the developer JSON into `schema.new`.
+  - return the Product Manager brief and designer guide in chat for debugging,
+  - skip developer/schema generation during the current design-debugging phase.
 - Chat-compatible assistant responses include `message`, `reasoning`, `summary`, and `schema: { prev, new }`.
-- Treats `apiKey` as an OpenRouter API key during the current testing phase.
+- Uses `AI_PROVIDER` and provider API keys from `.env`; the frontend does not need to send a provider key.
 - Creates a LangChain model through `src/agent/utility/create-model.ts`.
 - `createModel()` accepts the full LangChain model config and does not set local defaults.
-- `createModel()` currently uses `@langchain/openrouter`.
+- `createModel()` currently supports `@langchain/google` and `@langchain/openrouter`.
 - Product Manager DeepAgent creation lives in `src/agent/main-agent.ts`.
 - On each assistant request, the backend loads the document whose title is `index` and injects its content as Blockish plugin overview context.
 - The Product Manager gathers requirements, asks focused questions, and prepares a page brief.
@@ -234,9 +237,18 @@ Behavior:
 - The Product Manager has a first subagent named `designer`.
 - The designer subagent lives in `src/agent/subagents/designer-agent.ts`, uses the same Blockish overview context, and runs with a more creative temperature for design-guide work.
 - The designer subagent has a `suggest_missing_block` tool from `src/agent/tools/index.ts`.
+- Visual asset helpers live in `src/agent/tools/index.ts`:
+  - `collect_image_assets` for image candidates and source links,
+  - `collect_video_assets` for video source searches,
+  - `collect_icon_assets` for Iconify/Lucide SVG icon candidates with inline SVG markup.
+- During design-debug mode, the callback collects a visual asset pack in backend code and injects it into the designer prompt instead of relying on model tool calls.
+- Designer guides should include an Assets section with concrete asset candidates, URLs/source links, placement, and visual purpose.
+- Blockish blocks accept SVG icons only; designer/developer outputs should use inline SVG for icons, not PNG, emoji, font icons, or icon names alone.
 - Use `suggest_missing_block` when the current Blockish block set can build the page, but one or two missing blocks would materially improve future design quality or reduce awkward composition.
 - Missing block suggestions are saved with upsert semantics in `block_suggestions`, keyed by normalized title and incrementing `mention_count`.
-- The Product Manager has a second subagent named `developer`.
+- The Product Manager does not delegate to the developer during the current design-debugging phase.
+- The developer subagent exists but is not wired into the Product Manager while designer output is being debugged.
+- The Product Manager has a second subagent named `developer` for schema generation when debugging mode is removed.
 - The developer subagent lives in `src/agent/subagents/developer-agent.ts`, uses the same Blockish overview context, and runs with low temperature for implementation/schema work.
 - The developer subagent should convert briefs and design guides into buildable Blockish/Gutenberg schemas without inventing unsupported blocks, attributes, or extension data.
 - Generated schema validation lives in `src/agent/schema.ts`.
@@ -248,11 +260,14 @@ Behavior:
 - The developer should call `search_block_docs` with a block name before drafting schema for that specific Blockish block.
 - For now, the Product Manager should ask exactly one focused next question when more information is needed.
 - The Product Manager should not produce a brief until page type, goal, product/business, target audience, and primary CTA are known.
-- The assistant callback creates the Product Manager with OpenRouter `model: "openrouter/free"` and `temperature: 0.5`, then streams normalized messages through DeepAgents.
+- The assistant callback creates the Product Manager with the configured `AI_PROVIDER`/model and `temperature: 0.5`, then streams normalized messages through DeepAgents.
+- When the Product Manager delegates to the designer, the callback returns both the Product Manager brief sent to the designer and the designer guide as the final chat message, leaving `schema.new` as `null`.
+- If the Product Manager returns a ready page brief without a `designer` task call, the callback treats that brief as designer input and continues the design-debug flow.
+- Subagent text extraction combines assistant text messages so tool calls do not cause partial designer output to be returned.
 - Image attachments are converted into multimodal content on the latest user message before the agent run.
 - Valid assistant responses use Server-Sent Events with `delta`, `final`, `done`, and `error` events.
 - The `final` event contains chat-compatible data: `{ message, summary, schema: { prev, new }, interaction? }`.
-- `interaction` can describe quick UI controls such as yes/no, single choice, or multiple choice.
+- Quick-choice `interaction` generation is disabled during provider testing because hardcoded heuristic options can mismatch the actual model question.
 
 ### Block Suggestions
 

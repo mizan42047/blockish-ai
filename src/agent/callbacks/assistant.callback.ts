@@ -2,14 +2,10 @@ import type { Request, Response } from "express";
 import { createDeepAgent, type SubAgent } from "deepagents";
 import { getBlockishOverviewContext } from "agent/context/document-context.js";
 import { createProductManagerAgent } from "agent/main-agent.js";
-import { createDeveloperSubAgent } from "agent/subagents/developer-agent.js";
 import { createDesignerSubAgent } from "agent/subagents/designer-agent.js";
+import { collectPageVisualAssets } from "agent/tools/index.js";
 import type { CreateModelConfig } from "agent/utility/create-model.js";
-import {
-  generatedResponseContractName,
-  validateGeneratedResponse,
-  type BlockishGeneratedResponse,
-} from "agent/schema.js";
+import { config } from "config.js";
 import { isNonEmptyString, sendErrorResponse } from "utils.js";
 
 type AssistantMessage = {
@@ -78,7 +74,7 @@ type TaskCall = {
   subagentType: string;
 };
 
-type DelegatedSchemaResult = {
+type DelegatedDesignResult = {
   message: string;
   schemaNew: unknown | null;
   summary?: string;
@@ -222,8 +218,15 @@ function createModelMessages(
   });
 }
 
-function getResultMessages(result: unknown) {
-  const messages = (result as { messages?: Array<{ content?: unknown }> }).messages;
+type ResultMessage = {
+  _getType?: () => string;
+  content?: unknown;
+  role?: unknown;
+  type?: unknown;
+};
+
+function getResultMessages(result: unknown): ResultMessage[] {
+  const messages = (result as { messages?: ResultMessage[] }).messages;
 
   return Array.isArray(messages) ? messages : [];
 }
@@ -248,6 +251,28 @@ function hasFunctionCallContent(value: unknown): boolean {
   ));
 }
 
+function getMessageType(message: ResultMessage): string {
+  if (typeof message._getType === "function") {
+    return message._getType();
+  }
+
+  if (typeof message.type === "string") {
+    return message.type;
+  }
+
+  if (typeof message.role === "string") {
+    return message.role;
+  }
+
+  return "";
+}
+
+function isAssistantResultMessage(message: ResultMessage): boolean {
+  const type = getMessageType(message);
+
+  return type === "ai" || type === "assistant";
+}
+
 function getStringContent(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -268,6 +293,16 @@ function getStringContent(value: unknown): string {
   }
 
   return "";
+}
+
+function getAssistantTextMessageContent(result: unknown): string {
+  return getResultMessages(result)
+    .filter(isAssistantResultMessage)
+    .map((message) => message.content)
+    .filter((content) => !hasFunctionCallContent(content))
+    .map((content) => getStringContent(content).trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function getLastTextMessageContent(result: unknown): string {
@@ -449,88 +484,6 @@ function createSingleChoiceInteraction(
 }
 
 function getAssistantInteraction(message: unknown): AssistantInteraction | undefined {
-  const text = getStringContent(message).toLowerCase();
-
-  if (!text.includes("**question:**") && !text.includes("question:")) {
-    return undefined;
-  }
-
-  if (text.includes("page type") || text.includes("type of page")) {
-    return createSingleChoiceInteraction("page_type", "Choose page type", [
-      { label: "Landing page", value: "landing_page" },
-      { label: "Product page", value: "product_page" },
-      { label: "Homepage", value: "homepage" },
-      { label: "About page", value: "about_page" },
-      { label: "Blog post", value: "blog_post" },
-    ]);
-  }
-
-  if (text.includes("primary goal") || text.includes("main objective")) {
-    return createSingleChoiceInteraction("primary_goal", "Choose primary goal", [
-      { label: "Generate leads", value: "generate_leads" },
-      { label: "Get signups", value: "get_signups" },
-      { label: "Sell a product", value: "sell_product" },
-      { label: "Showcase features", value: "showcase_features" },
-      { label: "Explain the offer", value: "explain_offer" },
-    ]);
-  }
-
-  if (text.includes("target audience") || text.includes("who is this for")) {
-    return createSingleChoiceInteraction("target_audience", "Choose audience", [
-      { label: "Website owners", value: "website_owners" },
-      { label: "Developers", value: "developers" },
-      { label: "Agencies", value: "agencies" },
-      { label: "Small businesses", value: "small_businesses" },
-      { label: "Creators", value: "creators" },
-    ]);
-  }
-
-  if (text.includes("primary cta") || text.includes("call to action")) {
-    return createSingleChoiceInteraction("primary_cta", "Choose CTA", [
-      { label: "Download now", value: "download_now" },
-      { label: "Get started", value: "get_started" },
-      { label: "Book a demo", value: "book_demo" },
-      { label: "Contact us", value: "contact_us" },
-      { label: "Learn more", value: "learn_more" },
-    ]);
-  }
-
-  if (text.includes("section") && text.includes("include")) {
-    return {
-      id: "sections",
-      type: "multi_choice",
-      label: "Choose sections",
-      options: [
-        { label: "Hero", value: "hero" },
-        { label: "Features", value: "features" },
-        { label: "Benefits", value: "benefits" },
-        { label: "Testimonials", value: "testimonials" },
-        { label: "Pricing", value: "pricing" },
-        { label: "FAQ", value: "faq" },
-      ],
-      allowCustom: true,
-      required: true,
-    };
-  }
-
-  if (
-    text.includes("do you") ||
-    text.includes("should we") ||
-    text.includes("would you") ||
-    text.includes("is this")
-  ) {
-    return {
-      id: "confirmation",
-      type: "yes_no",
-      label: "Choose an answer",
-      options: [
-        { label: "Yes", value: "yes" },
-        { label: "No", value: "no" },
-      ],
-      required: true,
-    };
-  }
-
   return undefined;
 }
 
@@ -564,107 +517,57 @@ async function runAgentForText(
     }
   );
 
-  return getLastTextMessageContent(result) ||
+  return getAssistantTextMessageContent(result) ||
+    getLastTextMessageContent(result) ||
     getStringContent(getLastMessageContent(result));
 }
 
-function parseJsonObject(value: string): unknown | null {
-  const fencedJson = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  const jsonText = fencedJson ?? value;
-  const start = jsonText.indexOf("{");
-  const end = jsonText.lastIndexOf("}");
-
-  if (start === -1 || end === -1 || end <= start) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(jsonText.slice(start, end + 1));
-  } catch (error) {
-    return null;
-  }
-}
-
-function createDeveloperPrompt(
-  brief: string,
-  designGuide: string,
-  context: AssistantContext | null,
-  extensions: AssistantExtensionsContext | null
-) {
+function createDesignerDebugPrompt(brief: string, assetPack: unknown) {
   return [
-    "Create the final Blockish/Gutenberg block schema for the frontend.",
-    "Use the product brief and design guide below.",
-    `Return JSON matching ${generatedResponseContractName}.`,
-    "Put extension changes in schema.new.extensions and block changes in schema.new.blocks.",
-    "Prefer Class Manager for reusable/global style after checking existing classes.",
-    "Return only valid JSON. Do not wrap it in Markdown.",
-    "",
-    "Previous editor context:",
-    JSON.stringify(getSchemaPrev(context, extensions), null, 2),
-    "",
-    "Existing Class Manager classes:",
-    JSON.stringify(extensions?.classManager ?? [], null, 2),
-    "",
-    "Product brief:",
     brief,
     "",
-    "Design guide:",
-    designGuide,
+    "Use this backend-collected visual asset pack in the design guide.",
+    "Do not say you will collect assets; the assets are already provided.",
+    "Include an Assets section with exact placements.",
+    "For icons, Blockish accepts inline SVG only, so use the svg field.",
+    "",
+    "Visual asset pack:",
+    JSON.stringify(assetPack, null, 2),
   ].join("\n");
 }
 
-function createDeveloperRepairPrompt(
-  invalidOutput: string,
-  errors: string[]
-) {
-  return [
-    `Repair this output so it matches ${generatedResponseContractName}.`,
-    "Return only the corrected JSON object.",
-    "Do not include Markdown fences or explanation.",
-    "",
-    "Validation errors:",
-    ...errors.map((error) => `- ${error}`),
-    "",
-    "Invalid output:",
-    invalidOutput,
-  ].join("\n");
-}
+function getDesignerBrief(result: unknown): string | null {
+  const taskCall = getTaskCallFromContent(getLastMessageContent(result));
 
-async function getValidatedDeveloperResponse(
-  developer: ReturnType<typeof createDeepAgent>,
-  prompt: string,
-  signal: AbortSignal
-): Promise<BlockishGeneratedResponse | null> {
-  const firstOutput = await runAgentForText(developer, prompt, signal);
-  const firstParsed = parseJsonObject(firstOutput);
-  const firstValidation = validateGeneratedResponse(firstParsed);
-
-  if (firstValidation.value) {
-    return firstValidation.value;
+  if (taskCall?.subagentType === "designer") {
+    return taskCall.description;
   }
 
-  const repairOutput = await runAgentForText(
-    developer,
-    createDeveloperRepairPrompt(firstOutput, firstValidation.errors),
-    signal
-  );
-  const repairParsed = parseJsonObject(repairOutput);
-  const repairValidation = validateGeneratedResponse(repairParsed);
+  const text = getLastTextMessageContent(result).trim();
+  const lowerText = text.toLowerCase();
+  const hasQuestion = lowerText.includes("**question:**") ||
+    lowerText.includes("question:");
+  const looksLikeBrief = lowerText.includes("page brief") ||
+    (lowerText.includes("page type") &&
+      lowerText.includes("primary goal") &&
+      lowerText.includes("target audience"));
 
-  return repairValidation.value;
+  if (!hasQuestion && looksLikeBrief) {
+    return text;
+  }
+
+  return null;
 }
 
-async function runDelegatedSchemaFlow(
+async function runDelegatedDesignFlow(
   result: unknown,
   modelConfig: CreateModelConfig,
   blockishOverviewContext: string,
-  context: AssistantContext | null,
-  extensions: AssistantExtensionsContext | null,
   signal: AbortSignal
-): Promise<DelegatedSchemaResult | null> {
-  const taskCall = getTaskCallFromContent(getLastMessageContent(result));
+): Promise<DelegatedDesignResult | null> {
+  const designerBrief = getDesignerBrief(result);
 
-  if (!taskCall || taskCall.subagentType !== "designer") {
+  if (!designerBrief) {
     return null;
   }
 
@@ -674,9 +577,10 @@ async function runDelegatedSchemaFlow(
       modelConfig,
     })
   );
+  const assetPack = await collectPageVisualAssets(designerBrief);
   const designGuide = await runAgentForText(
     designer,
-    taskCall.description,
+    createDesignerDebugPrompt(designerBrief, assetPack),
     signal
   );
 
@@ -684,30 +588,18 @@ async function runDelegatedSchemaFlow(
     return null;
   }
 
-  const developer = createRunnableSubAgent(
-    createDeveloperSubAgent({
-      blockishOverviewContext,
-      modelConfig,
-    })
-  );
-  const developerResponse = await getValidatedDeveloperResponse(
-    developer,
-    createDeveloperPrompt(taskCall.description, designGuide, context, extensions),
-    signal
-  );
-
-  if (!developerResponse) {
-    return {
-      message: "I generated a design guide, but the schema output was invalid.",
-      schemaNew: null,
-      summary: "Developer schema validation failed.",
-    };
-  }
-
   return {
-    message: developerResponse.message,
-    schemaNew: developerResponse.schema.new,
-    summary: developerResponse.summary,
+    message: [
+      "## Product Manager Brief Sent To Designer",
+      "",
+      designerBrief,
+      "",
+      "## Designer Guide",
+      "",
+      designGuide,
+    ].join("\n"),
+    schemaNew: null,
+    summary: "Returned the Product Manager brief and designer guide for debugging.",
   };
 }
 
@@ -717,7 +609,7 @@ function createChatCompatibleResponse(
   context: AssistantContext | null,
   extensions: AssistantExtensionsContext | null,
   streamedMessage?: string,
-  delegatedResult?: DelegatedSchemaResult | null
+  delegatedResult?: DelegatedDesignResult | null
 ): ChatCompatibleResponse {
   const finalMessage =
     delegatedResult?.message ||
@@ -770,12 +662,10 @@ async function streamAgentResponse(
   }
 
   const result = await run.output;
-  const delegatedResult = await runDelegatedSchemaFlow(
+  const delegatedResult = await runDelegatedDesignFlow(
     result,
     modelConfig,
     blockishOverviewContext,
-    context,
-    extensions,
     signal
   );
   const responseData = createChatCompatibleResponse(
@@ -802,12 +692,6 @@ export async function assistantCallback(
 ) {
   try {
     const body = req.body ?? {};
-    const { apiKey } = body;
-
-    if (!isNonEmptyString(apiKey)) {
-      return sendErrorResponse(res, 400, "apiKey is required");
-    }
-
     const messages = getMessages(body);
 
     if (!messages) {
@@ -826,11 +710,12 @@ export async function assistantCallback(
     const modelMessages = createModelMessages(messages, imageAttachments);
     const blockishOverviewContext = await getBlockishOverviewContext();
     const modelConfig = {
-      apiKey,
-      model: "openrouter/free",
+      apiKey: config.aiApiKey,
+      model: config.aiModel,
+      provider: config.aiProvider,
       temperature: 0.5,
       siteName: "Blockish AI",
-      siteUrl: "http://localhost",
+      siteUrl: config.openRouterSiteUrl,
     };
     const agent = createProductManagerAgent({
       blockishOverviewContext,
