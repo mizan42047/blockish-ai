@@ -261,6 +261,9 @@ Behavior:
 - For now, the Product Manager should ask exactly one focused next question when more information is needed.
 - The Product Manager should not produce a brief until page type, goal, product/business, target audience, and primary CTA are known.
 - The assistant callback creates the Product Manager with the configured `AI_PROVIDER`/model and `temperature: 0.5`, then streams normalized messages through DeepAgents.
+- The assistant callback can bypass the Product Manager when a section/page request already has enough conversation context, then run designer and developer directly to produce `schema.new`.
+- If developer schema generation fails or returns invalid JSON, the callback returns a minimal valid Blockish schema fallback instead of leaving `schema.new` empty.
+- Assistant interaction buttons are derived from explicit `**Options:**` model output or inferred by backend heuristics for common questions such as gym type, primary CTA/goal, target audience, and yes/no.
 - When the Product Manager delegates to the designer, the callback returns both the Product Manager brief sent to the designer and the designer guide as the final chat message, leaving `schema.new` as `null`.
 - If the Product Manager returns a ready page brief without a `designer` task call, the callback treats that brief as designer input and continues the design-debug flow.
 - Subagent text extraction combines assistant text messages so tool calls do not cause partial designer output to be returned.

@@ -1,5 +1,10 @@
 import type { SubAgent } from "deepagents";
-import { createSuggestMissingBlockTool } from "agent/tools/index.js";
+import {
+  createCollectIconAssetsTool,
+  createCollectImageAssetsTool,
+  createCollectVideoAssetsTool,
+  createSuggestMissingBlockTool,
+} from "agent/tools/index.js";
 import {
   createModel,
   type CreateModelConfig,
@@ -25,10 +30,10 @@ export function createDesignerSubAgent(
     "- Create strong visual direction, layout rhythm, section hierarchy, interaction ideas, and content structure.",
     "- Think like a senior web/product designer who understands conversion, scanning, responsive layout, and Gutenberg constraints.",
     "- Be creative, but keep ideas buildable with Blockish blocks and extensions.",
-    "- The backend provides a visual asset pack in the user message when assets are needed; use that pack instead of calling asset tools.",
+    "- Call collect_image_assets, collect_video_assets, and collect_icon_assets at the start to gather visual candidates.",
     "- The final guide must include an Assets section.",
     "- In the Assets section, include selected image, video, and icon candidates with URLs/source links and exact placement.",
-    "- Blockish blocks accept SVG icons only; when using icons, include the inline SVG from the provided asset pack, not PNG, emoji, font icons, or icon names alone.",
+    "- Blockish blocks accept SVG icons only; when using icons, include the inline SVG from the collect_icon_assets result, not PNG, emoji, font icons, or icon names alone.",
     "- For each major visual section, specify which asset should be used, why it fits, and whether it is a hero background, inline image, card thumbnail, icon, or CTA visual.",
     "- Do not leave visual direction as generic phrases like 'high-quality imagery', 'screenshot/mockup', or 'supporting illustration' without concrete asset candidates.",
     "- Use the current Blockish block/plugin context first; do not invent unavailable blocks as if they already exist.",
@@ -36,8 +41,7 @@ export function createDesignerSubAgent(
     "- Only suggest missing blocks for real repeated design value, not for tiny one-off styling preferences.",
     "- Prefer concrete design guidance over vague adjectives.",
     "- Mention assumptions clearly when the brief leaves creative gaps.",
-    "- Do not create final block schema.",
-    "- Do not write application code.",
+    "- Your design guide will be handed off to the Blockish developer subagent, which will generate the final block schema. Focus on visual direction, layout, and content — not schema syntax.",
     "",
     formatBlockishOverviewContext(input.blockishOverviewContext),
   ].join("\n");
@@ -50,6 +54,11 @@ export function createDesignerSubAgent(
       ...input.modelConfig,
       temperature: 0.9,
     }),
-    tools: [createSuggestMissingBlockTool()],
+    tools: [
+      createCollectImageAssetsTool(),
+      createCollectVideoAssetsTool(),
+      createCollectIconAssetsTool(),
+      createSuggestMissingBlockTool(),
+    ],
   };
 }

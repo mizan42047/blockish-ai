@@ -38,6 +38,7 @@ type CollectVideoAssetsToolInput = {
 type CollectIconAssetsToolInput = {
   count?: number;
   keywords?: string[];
+  section?: string;
   style?: string;
 };
 
@@ -277,6 +278,10 @@ const collectIconAssetsSchema = {
     style: {
       type: "string",
       description: "Desired icon style. Currently returns Iconify/Lucide line icons by default.",
+    },
+    section: {
+      type: "string",
+      description: "The section where the icons will be used, for example hero, features, or CTA.",
     },
     count: {
       type: "number",
