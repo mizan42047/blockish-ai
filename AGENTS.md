@@ -15,7 +15,7 @@ When implementing features or fixes:
 - Keep Express route registration and route callbacks in `src/server.ts` unless the feature clearly needs a new module.
 - Keep SQL and database access in repository files under `src/routes`.
 - Keep document payload-shape middleware in `src/middlewares/document.middleware.ts`.
-- Keep assistant orchestration, providers, models, and tools under `src/agent`.
+- Keep assistant orchestration, model setup, and tools under `src/agent`.
 - Put shared cross-module types in `src/types.ts`.
 - Put small generic parsing or validation helpers in `src/utils.ts`.
 - Do not add frontend tooling or UI code unless the task explicitly asks for it.
@@ -61,7 +61,7 @@ The `/assistant` endpoint runs a Blockish page-generation orchestrator. Keep its
 3. Block schema developer creates schema from the guide.
 4. Application code handles validation.
 
-Add agent tools in `src/agent/tools/index.ts` when tools are needed. Keep provider-specific model setup in `src/agent/models.ts`.
+Add agent tools in `src/agent/tools/index.ts` when tools are needed. Keep model creation in `src/agent/utility/create-model.ts`.
 
 ## Verification
 
@@ -69,8 +69,9 @@ After code changes, run:
 
 ```bash
 npm run typecheck
-npm run build
 ```
+
+Do not run `npm run build` unless the user explicitly asks for it.
 
 If endpoint behavior changes, manually test the affected route with a representative request when practical.
 
@@ -105,7 +106,7 @@ Implement the requested change with minimal, focused edits. Preserve the current
 
 Use strict TypeScript, .js runtime import extensions, double quotes, semicolons, parameterized SQL, and the existing JSON response shape. Do not touch node_modules, dist, or unrelated user changes.
 
-After editing, run npm run typecheck and npm run build. Then summarize the changed files, verification results, and any caveats.
+After editing, run npm run typecheck. Do not run npm run build unless explicitly asked. Then summarize the changed files, verification results, and any caveats.
 
 Task:
 [Describe the requested code change here.]

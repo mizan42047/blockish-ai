@@ -24,10 +24,9 @@ There is no frontend in this repository.
 ## Required Environment
 
 - `DATABASE_URL` is required.
-- `AI_PROVIDER` selects the active model provider. Supported values: `gemini` and `openrouter`.
-- The selected provider's API key is required:
-  - `GEMINI_API_KEY` for `AI_PROVIDER=gemini`
-  - `OPENROUTER_API_KEY` for `AI_PROVIDER=openrouter`
+- Ollama is the only configured assistant model provider for local testing.
+- `OLLAMA_MODEL` is optional and defaults to `qwen3:8b`.
+- `OLLAMA_BASE_URL` is optional and defaults to `http://localhost:11434`.
 - `PORT` is optional and defaults to `3000`.
 Example local database from `docker-compose.yml`:
 
@@ -220,16 +219,14 @@ Accepted body fields:
 
 Behavior:
 
-- Requires the selected provider API key in the backend environment.
+- Uses local Ollama through `@langchain/ollama`; no frontend or backend provider API key is required.
 - Runs the Product Manager first. When the model returns a DeepAgents `task` function call for the designer instead of completing the nested run, the callback completes the workflow itself:
   - run designer from the ready product brief,
   - return the Product Manager brief and designer guide in chat for debugging,
   - skip developer/schema generation during the current design-debugging phase.
 - Chat-compatible assistant responses include `message`, `reasoning`, `summary`, and `schema: { prev, new }`.
-- Uses `AI_PROVIDER` and provider API keys from `.env`; the frontend does not need to send a provider key.
 - Creates a LangChain model through `src/agent/utility/create-model.ts`.
-- `createModel()` accepts the full LangChain model config and does not set local defaults.
-- `createModel()` currently supports `@langchain/google` and `@langchain/openrouter`.
+- `createModel()` accepts Ollama config and creates a `ChatOllama` model.
 - Product Manager DeepAgent creation lives in `src/agent/main-agent.ts`.
 - On each assistant request, the backend loads the document whose title is `index` and injects its content as Blockish plugin overview context.
 - The Product Manager gathers requirements, asks focused questions, and prepares a page brief.
@@ -260,7 +257,7 @@ Behavior:
 - The developer should call `search_block_docs` with a block name before drafting schema for that specific Blockish block.
 - For now, the Product Manager should ask exactly one focused next question when more information is needed.
 - The Product Manager should not produce a brief until page type, goal, product/business, target audience, and primary CTA are known.
-- The assistant callback creates the Product Manager with the configured `AI_PROVIDER`/model and `temperature: 0.5`, then streams normalized messages through DeepAgents.
+- The assistant callback creates the Product Manager with the configured Ollama model and `temperature: 0.5`, then streams normalized messages through DeepAgents.
 - The assistant callback can bypass the Product Manager when a section/page request already has enough conversation context, then run designer and developer directly to produce `schema.new`.
 - If developer schema generation fails or returns invalid JSON, the callback returns a minimal valid Blockish schema fallback instead of leaving `schema.new` empty.
 - Assistant interaction buttons are derived from explicit `**Options:**` model output or inferred by backend heuristics for common questions such as gym type, primary CTA/goal, target audience, and yes/no.

@@ -1,4 +1,7 @@
+import { mkdir, readFile, writeFile } from "fs/promises";
+import { join } from "path";
 import { tool } from "langchain";
+import { config } from "config.js";
 import { getDocuments } from "routes/document.ropository.js";
 import { upsertBlockSuggestion } from "routes/block-suggestions.repository.js";
 
@@ -42,114 +45,60 @@ type CollectIconAssetsToolInput = {
   style?: string;
 };
 
-type ImageAsset = {
-  credit: string;
-  keywords: string[];
-  sourceUrl: string;
-  title: string;
-  url: string;
+
+type FontAwesomeIcon = {
+  label: string;
+  search: { terms: string[] };
+  styles: string[];
+  svg: Record<string, { raw: string }>;
+  free: string[];
 };
 
-type IconAsset = {
-  icon: string;
-  keywords: string[];
-  title: string;
-};
+const FA_ICONS_URL = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/refs/heads/7.x/metadata/icons.json";
+const FA_CACHE_PATH = join(process.cwd(), ".cache", "fa-icons.json");
+const FA_STYLE_PREFERENCE = ["solid", "regular", "brands", "thin", "light"];
 
-const imageAssetLibrary: ImageAsset[] = [
-  {
-    title: "Modern website builder workspace",
-    keywords: ["wordpress", "plugin", "website", "builder", "software", "saas"],
-    url: "https://images.unsplash.com/photo-1498050108023-c5249f4df0852?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/turned-on-gray-laptop-computer-XJXWbfSo2f0",
-    credit: "Unsplash",
-  },
-  {
-    title: "Analytics and product dashboard",
-    keywords: ["dashboard", "analytics", "growth", "business", "conversion", "saas"],
-    url: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/person-using-macbook-pro-pypeCEaJeZY",
-    credit: "Unsplash",
-  },
-  {
-    title: "Collaborative product team",
-    keywords: ["team", "agency", "collaboration", "creative", "design", "business"],
-    url: "https://images.unsplash.com/photo-1551434678-e076c223a692?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/people-sitting-down-near-table-with-assorted-laptop-computers-Oalh2MojUuk",
-    credit: "Unsplash",
-  },
-  {
-    title: "Clean modern office interior",
-    keywords: ["professional", "modern", "office", "startup", "clean", "workspace"],
-    url: "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/photo-of-office-turned-on-lights-6anudmpILw4",
-    credit: "Unsplash",
-  },
-  {
-    title: "Fitness training space",
-    keywords: ["gym", "fitness", "training", "health", "exercise", "wellness"],
-    url: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/man-carrying-barbell-inside-gym-lrQPTQs7nQQ",
-    credit: "Unsplash",
-  },
-  {
-    title: "Restaurant table and atmosphere",
-    keywords: ["restaurant", "food", "cafe", "hospitality", "dining", "menu"],
-    url: "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/empty-tables-and-chairs-inside-building-poI7DelFiVA",
-    credit: "Unsplash",
-  },
-  {
-    title: "Online store packaging",
-    keywords: ["shop", "ecommerce", "product", "store", "commerce", "retail"],
-    url: "https://images.unsplash.com/photo-1472851294608-062f824d29cc?auto=format&fit=crop&w=1600&q=80",
-    sourceUrl: "https://unsplash.com/photos/store-lot-with-assorted-clothes-1SAnrIxw5OY",
-    credit: "Unsplash",
-  },
-];
+let faIconsCache: Record<string, FontAwesomeIcon> | null = null;
 
-const iconAssetLibrary: IconAsset[] = [
-  {
-    title: "Blocks",
-    icon: "lucide:blocks",
-    keywords: ["block", "blocks", "wordpress", "builder", "components"],
-  },
-  {
-    title: "Plugin",
-    icon: "lucide:puzzle",
-    keywords: ["plugin", "extension", "addon", "integration"],
-  },
-  {
-    title: "Layout",
-    icon: "lucide:layout-template",
-    keywords: ["layout", "template", "page", "section", "design"],
-  },
-  {
-    title: "Style",
-    icon: "lucide:palette",
-    keywords: ["style", "design", "color", "brand", "creative"],
-  },
-  {
-    title: "Fast",
-    icon: "lucide:zap",
-    keywords: ["fast", "speed", "performance", "efficient", "build"],
-  },
-  {
-    title: "Reliable",
-    icon: "lucide:shield-check",
-    keywords: ["secure", "reliable", "trust", "quality", "proof"],
-  },
-  {
-    title: "Download",
-    icon: "lucide:download",
-    keywords: ["download", "install", "cta", "conversion"],
-  },
-  {
-    title: "Launch",
-    icon: "lucide:rocket",
-    keywords: ["launch", "growth", "start", "cta", "success"],
-  },
-];
+async function loadFontAwesomeIcons(): Promise<Record<string, FontAwesomeIcon>> {
+  if (faIconsCache) return faIconsCache;
+
+  try {
+    const cached = await readFile(FA_CACHE_PATH, "utf-8");
+    faIconsCache = JSON.parse(cached) as Record<string, FontAwesomeIcon>;
+    return faIconsCache;
+  } catch {
+    // cache miss — fall through to network fetch
+  }
+
+  const response = await fetch(FA_ICONS_URL);
+  faIconsCache = await response.json() as Record<string, FontAwesomeIcon>;
+
+  mkdir(join(process.cwd(), ".cache"), { recursive: true })
+    .then(() => writeFile(FA_CACHE_PATH, JSON.stringify(faIconsCache), "utf-8"))
+    .catch(() => {});
+
+  return faIconsCache;
+}
+
+function getFaIconSvg(icon: FontAwesomeIcon): { svg: string; style: string } {
+  const style = FA_STYLE_PREFERENCE.find((s) => icon.svg[s]?.raw) ?? icon.styles[0] ?? "solid";
+  return { svg: icon.svg[style]?.raw ?? "", style };
+}
+
+function buildFallbackImages(keywords: string[], count: number) {
+  const seed = keywords.join("-") || "website";
+  return Array.from({ length: count }, (_, i) => ({
+    type: "image",
+    title: `${seed} placeholder ${i + 1}`,
+    url: `https://picsum.photos/seed/${seed}-${i}/1600/900`,
+    sourceUrl: "https://picsum.photos",
+    credit: "picsum.photos",
+    suggestedUse: "website section",
+    mood: null as string | null,
+  }));
+}
+
 
 const searchBlockDocsSchema = {
   type: "object",
@@ -327,131 +276,182 @@ function getKeywordScore(assetKeywords: string[], keywords: string[]) {
   ), 0);
 }
 
-function toIconifySvgUrl(icon: string) {
-  const [collection, name] = icon.split(":");
-
-  return `https://api.iconify.design/${collection}/${name}.svg`;
-}
-
 function toSearchQuery(keywords: string[], fallback: string) {
   return encodeURIComponent(keywords.length ? keywords.join(" ") : fallback);
 }
 
-async function fetchIconSvg(icon: string) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
+type PexelsPhoto = {
+  alt: string | null;
+  photographer: string;
+  url: string;
+  src: { large: string };
+};
 
-  try {
-    const response = await fetch(toIconifySvgUrl(icon), {
-      signal: controller.signal,
-    });
+async function searchPexelsImages(query: string, count: number, apiKey: string) {
+  const url = new URL("https://api.pexels.com/v1/search");
+  url.searchParams.set("query", query);
+  url.searchParams.set("per_page", String(count));
+  url.searchParams.set("orientation", "landscape");
 
-    if (!response.ok) {
-      return "";
-    }
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: apiKey },
+    signal: AbortSignal.timeout(5000),
+  });
 
-    const svg = await response.text();
+  if (!response.ok) return null;
 
-    return svg.trim().startsWith("<svg") ? svg.trim() : "";
-  } catch (error) {
-    return "";
-  } finally {
-    clearTimeout(timeout);
-  }
+  const data = await response.json() as { photos: PexelsPhoto[] };
+
+  return data.photos.map((photo) => ({
+    type: "image",
+    title: photo.alt ?? query,
+    url: photo.src.large,
+    sourceUrl: photo.url,
+    credit: `Photo by ${photo.photographer} on Pexels`,
+    suggestedUse: "",
+    mood: null as string | null,
+  }));
 }
 
-export function collectImageAssets(input: CollectImageAssetsToolInput) {
+export async function collectImageAssets(input: CollectImageAssetsToolInput) {
   const keywords = normalizeKeywords(input.keywords);
   const limit = getToolLimit(input.count, 4, 6);
-  const rankedAssets = imageAssetLibrary
-    .map((asset) => ({
-      asset,
-      score: getKeywordScore(asset.keywords, keywords),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(({ asset }) => ({
-      type: "image",
-      title: asset.title,
-      url: asset.url,
-      sourceUrl: asset.sourceUrl,
-      credit: asset.credit,
-      suggestedUse: input.section || "website section",
-      mood: input.mood || null,
-    }));
+  const query = keywords.length ? keywords.join(" ") : "website";
+
+  if (config.pexelsApiKey) {
+    const photos = await searchPexelsImages(query, limit, config.pexelsApiKey).catch(() => null);
+
+    if (photos?.length) {
+      return {
+        query: keywords,
+        note: "Real Pexels images. Review licensing before production use.",
+        results: photos.map((p) => ({
+          ...p,
+          suggestedUse: input.section || "website section",
+          mood: input.mood || null,
+        })),
+      };
+    }
+  }
+
+  const fallbackImages = buildFallbackImages(keywords, limit).map((img) => ({
+    ...img,
+    suggestedUse: input.section || "website section",
+    mood: input.mood || null,
+  }));
 
   return {
     query: keywords,
-    note: "Use these as visual candidates/placeholders. Final production assets should be reviewed for fit and licensing.",
-    results: rankedAssets,
-    moreSources: [
-      `https://unsplash.com/s/photos/${toSearchQuery(keywords, "website")}`,
-      `https://www.pexels.com/search/${toSearchQuery(keywords, "website")}/`,
-    ],
+    note: "Fallback placeholders from picsum.photos. Add PEXELS_API_KEY for real contextual images.",
+    results: fallbackImages,
+    placeholder: `https://placehold.co/1600x900/png`,
   };
 }
 
-export function collectVideoAssets(input: CollectVideoAssetsToolInput) {
+type PexelsVideo = {
+  url: string;
+  width: number;
+  height: number;
+  user: { name: string; url: string };
+  video_files: { link: string; quality: string; file_type: string }[];
+};
+
+async function searchPexelsVideos(query: string, count: number, apiKey: string) {
+  const url = new URL("https://api.pexels.com/videos/search");
+  url.searchParams.set("query", query);
+  url.searchParams.set("per_page", String(count));
+  url.searchParams.set("orientation", "landscape");
+
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: apiKey },
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!response.ok) return null;
+
+  const data = await response.json() as { videos: PexelsVideo[] };
+
+  return data.videos.map((video) => {
+    const file = video.video_files.find((f) => f.quality === "hd" && f.file_type === "video/mp4")
+      ?? video.video_files.find((f) => f.file_type === "video/mp4")
+      ?? video.video_files[0];
+
+    return {
+      type: "video",
+      title: `Pexels video by ${video.user.name}`,
+      url: file?.link ?? "",
+      sourceUrl: `${video.url}`,
+      credit: `Video by ${video.user.name} on Pexels`,
+      suggestedUse: "",
+      mood: null as string | null,
+    };
+  });
+}
+
+export async function collectVideoAssets(input: CollectVideoAssetsToolInput) {
   const keywords = normalizeKeywords(input.keywords);
   const limit = getToolLimit(input.count, 3, 5);
-  const query = toSearchQuery(keywords, "website product demo");
-  const sources = [
-    {
-      type: "video",
-      title: "Pexels video search",
-      sourceUrl: `https://www.pexels.com/search/videos/${query}/`,
-      suggestedUse: input.section || "hero or proof section",
-    },
-    {
-      type: "video",
-      title: "Coverr video search",
-      sourceUrl: `https://coverr.co/search?q=${query}`,
-      suggestedUse: input.section || "hero or proof section",
-    },
-    {
-      type: "video",
-      title: "Pixabay video search",
-      sourceUrl: `https://pixabay.com/videos/search/${query}/`,
-      suggestedUse: input.section || "hero or proof section",
-    },
-  ].slice(0, limit);
+  const query = keywords.length ? keywords.join(" ") : "website product demo";
 
+  if (config.pexelsApiKey) {
+    const videos = await searchPexelsVideos(query, limit, config.pexelsApiKey).catch(() => null);
+
+    if (videos?.length) {
+      return {
+        query: keywords,
+        mood: input.mood || null,
+        note: "Real Pexels videos. Review licensing before production use.",
+        results: videos.map((v) => ({
+          ...v,
+          suggestedUse: input.section || "hero or proof section",
+          mood: input.mood || null,
+        })),
+      };
+    }
+  }
+
+  const fallbackQuery = toSearchQuery(keywords, "website product demo");
   return {
     query: keywords,
     mood: input.mood || null,
-    note: "Video source candidates require manual selection or provider API keys for direct file URLs.",
-    results: sources,
+    note: "Fallback search links. Add PEXELS_API_KEY for real video URLs.",
+    results: [
+      { type: "video", title: "Pexels video search", sourceUrl: `https://www.pexels.com/search/videos/${fallbackQuery}/`, suggestedUse: input.section || "hero or proof section" },
+      { type: "video", title: "Coverr video search", sourceUrl: `https://coverr.co/search?q=${fallbackQuery}`, suggestedUse: input.section || "hero or proof section" },
+      { type: "video", title: "Pixabay video search", sourceUrl: `https://pixabay.com/videos/search/${fallbackQuery}/`, suggestedUse: input.section || "hero or proof section" },
+    ].slice(0, limit),
   };
 }
 
 export async function collectIconAssets(input: CollectIconAssetsToolInput) {
   const keywords = normalizeKeywords(input.keywords);
   const limit = getToolLimit(input.count, 6, 10);
-  const rankedIcons = await Promise.all(iconAssetLibrary
-    .map((asset) => ({
-      asset,
-      score: getKeywordScore(asset.keywords, keywords),
+  const faIcons = await loadFontAwesomeIcons();
+
+  const rankedIcons = Object.entries(faIcons)
+    .map(([name, icon]) => ({
+      name,
+      icon,
+      score: getKeywordScore([name, ...icon.search.terms], keywords),
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map(async ({ asset }) => {
-      const svgUrl = toIconifySvgUrl(asset.icon);
-
+    .map(({ name, icon }) => {
+      const { svg, style } = getFaIconSvg(icon);
       return {
         type: "icon",
-        title: asset.title,
-        icon: asset.icon,
+        title: icon.label,
+        icon: `fa-${style}:${name}`,
         format: "svg",
-        svg: await fetchIconSvg(asset.icon),
-        svgUrl,
-        sourceUrl: `https://icon-sets.iconify.design/${asset.icon.replace(":", "/")}/`,
-        style: input.style || "Lucide line icon",
+        svg,
+        sourceUrl: `https://fontawesome.com/icons/${name}`,
+        style: input.style || style,
       };
-    }));
+    });
 
   return {
     query: keywords,
-    note: "Blockish blocks accept SVG icons only. Use the svg field for block icon values. svgUrl/sourceUrl are references for review.",
+    note: "Blockish blocks accept SVG icons only. Use the svg field for block icon values.",
     results: rankedIcons,
   };
 }
@@ -460,12 +460,12 @@ export async function collectPageVisualAssets(brief: string) {
   const keywords = [brief];
 
   return {
-    images: collectImageAssets({
+    images: await collectImageAssets({
       keywords,
       section: "full page",
       count: 4,
     }),
-    videos: collectVideoAssets({
+    videos: await collectVideoAssets({
       keywords,
       section: "hero or proof section",
       count: 2,
@@ -554,7 +554,7 @@ export function createSearchDocsTool() {
 export function createCollectImageAssetsTool() {
   return tool(
     async (input) => {
-      return JSON.stringify(collectImageAssets(
+      return JSON.stringify(await collectImageAssets(
         input as CollectImageAssetsToolInput
       ));
     },
@@ -569,7 +569,7 @@ export function createCollectImageAssetsTool() {
 export function createCollectVideoAssetsTool() {
   return tool(
     async (input) => {
-      return JSON.stringify(collectVideoAssets(
+      return JSON.stringify(await collectVideoAssets(
         input as CollectVideoAssetsToolInput
       ));
     },

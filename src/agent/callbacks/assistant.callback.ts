@@ -2,9 +2,9 @@ import type { Request, Response } from "express";
 import { createDeepAgent, type SubAgent } from "deepagents";
 import { getBlockishOverviewContext } from "agent/context/document-context.js";
 import { createProductManagerAgent } from "agent/main-agent.js";
-import { createDesignerSubAgent } from "agent/subagents/designer-agent.js";
 import { createDeveloperSubAgent } from "agent/subagents/developer-agent.js";
 import {
+  normalizeGeneratedResponse,
   validateGeneratedResponse,
   type BlockishGeneratedResponse,
   type BlockishSchemaBlock,
@@ -763,7 +763,7 @@ function shouldBuildDirectly(messages: AssistantMessage[]): boolean {
     return false;
   }
 
-  if (hasNamedSection && (userMessages.length >= 2 || ctaPattern.test(text))) {
+  if (hasNamedSection) {
     return true;
   }
 
@@ -814,43 +814,6 @@ function createDirectBuildBrief(
   };
 }
 
-function createRunnableSubAgent(subAgent: SubAgent) {
-  return createDeepAgent({
-    name: subAgent.name,
-    model: subAgent.model as never,
-    systemPrompt: subAgent.systemPrompt,
-    tools: subAgent.tools ?? [],
-  });
-}
-
-async function runAgentForText(
-  agent: ReturnType<typeof createDeepAgent>,
-  prompt: string,
-  signal: AbortSignal
-) {
-  const runnable = agent as {
-    invoke: (
-      state: { messages: AssistantMessage[] },
-      config?: { recursionLimit?: number; signal?: AbortSignal }
-    ) => Promise<unknown>;
-  };
-  const result = await runnable.invoke(
-    {
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      recursionLimit: 80,
-      signal,
-    }
-  );
-
-  return {
-    result,
-    text: getAssistantTextMessageContent(result) ||
-      getLastTextMessageContent(result) ||
-      getStringContent(getLastMessageContent(result)),
-  };
-}
 
 function createDeveloperPrompt(
   brief: DirectBuildBrief,
@@ -870,6 +833,10 @@ function createDeveloperPrompt(
     "Return the final BlockishGeneratedResponse JSON only.",
     "schema.new.blocks must not be empty.",
     "Use blockish/container, blockish/heading, blockish/button, and blockish/image when they fit.",
+    "Class Manager is mandatory: create or reuse section, card, heading, text, button, and image classes.",
+    "Attach Class Manager classes to blocks with attributes.classManager tempId references.",
+    "Every blockish/container block must include attributes.isVariationPicked: true.",
+    "Every blockish/image block must include attributes.image.url as a valid http(s) or data:image URL.",
   ].join("\n");
 }
 
@@ -879,7 +846,10 @@ function createContainerBlock(
 ): BlockishSchemaBlock {
   return {
     name: "blockish/container",
-    attributes,
+    attributes: {
+      isVariationPicked: true,
+      ...attributes,
+    },
     innerBlocks,
   };
 }
@@ -1110,7 +1080,7 @@ function createFallbackSchema(
     ? createTeamFallbackBlocks(brief)
     : createHeroFallbackBlocks(brief);
 
-  return {
+  return normalizeGeneratedResponse({
     message: `I built a ${brief.scope} draft with buildable Blockish blocks.`,
     summary: `${brief.scope} schema generated.`,
     schema: {
@@ -1121,6 +1091,31 @@ function createFallbackSchema(
         blocks,
       },
     },
+  });
+}
+
+function createRunnableSubAgent(subAgent: SubAgent) {
+  return createDeepAgent({
+    name: subAgent.name,
+    model: subAgent.model as never,
+    systemPrompt: subAgent.systemPrompt,
+    tools: subAgent.tools ?? [],
+    responseFormat: subAgent.responseFormat as never,
+  });
+}
+
+async function runAgentForText(
+  agent: ReturnType<typeof createDeepAgent>,
+  prompt: string,
+  signal: AbortSignal
+) {
+  const result = await (agent as unknown as {
+    invoke: (state: { messages: AssistantMessage[] }, config?: { recursionLimit?: number; signal?: AbortSignal }) => Promise<unknown>;
+  }).invoke({ messages: [{ role: "user", content: prompt }] }, { recursionLimit: 80, signal });
+
+  return {
+    result,
+    text: getLastTextMessageContent(result) || getStringContent(getLastMessageContent(result)),
   };
 }
 
@@ -1133,36 +1128,21 @@ async function runDirectBuildFlow(
   signal: AbortSignal
 ): Promise<BlockishGeneratedResponse> {
   try {
-    const designer = createRunnableSubAgent(
-      createDesignerSubAgent({
-        blockishOverviewContext,
-        modelConfig,
-      })
-    );
-    const designerResult = await runAgentForText(
-      designer,
-      brief.text,
-      signal
-    );
     const developer = createRunnableSubAgent(
-      createDeveloperSubAgent({
-        blockishOverviewContext,
-        modelConfig,
-      })
+      createDeveloperSubAgent({ modelConfig, blockishOverviewContext })
     );
-    const developerResult = await runAgentForText(
+    const { result } = await runAgentForText(
       developer,
-      createDeveloperPrompt(brief, designerResult.text, context, extensions),
+      createDeveloperPrompt(brief, brief.text, context, extensions),
       signal
     );
-    const developerSchema = findDeveloperSchemaFromResult(developerResult.result);
+    const structuredResult = (result as Record<string, unknown>).structuredResponse;
+    const directValidation = validateGeneratedResponse(structuredResult);
+    const developerSchema = directValidation.value ?? findDeveloperSchemaFromResult(result);
 
     return developerSchema ?? createFallbackSchema(brief, context);
   } catch (error) {
-    if (signal.aborted) {
-      throw error;
-    }
-
+    if (signal.aborted) throw error;
     console.error("Direct build flow failed, using fallback schema:", error);
     return createFallbackSchema(brief, context);
   }
@@ -1346,7 +1326,20 @@ async function streamAgentResponse(
   }
 
   const result = await run.output;
-  const developerSchema = findDeveloperSchemaFromResult(result);
+
+  const structuredResult = (result as Record<string, unknown>).structuredResponse;
+  const directValidation = validateGeneratedResponse(structuredResult);
+  let developerSchema = directValidation.value ?? findDeveloperSchemaFromResult(result);
+
+  if (!developerSchema) {
+    const fallbackBrief = createDirectBuildBrief(summaryMessages);
+
+    if (fallbackBrief) {
+      developerSchema = createFallbackSchema(fallbackBrief, context);
+      logGeneratedSchema("agent-fallback", developerSchema.schema.new);
+      writeSse(res, "status", { step: "Fallback schema generated" });
+    }
+  }
 
   if (developerSchema) {
     logGeneratedSchema("agent", developerSchema.schema.new);
@@ -1442,12 +1435,9 @@ export async function assistantCallback(
     const modelMessages = createModelMessages(messages, imageAttachments);
     const blockishOverviewContext = await getBlockishOverviewContext();
     const modelConfig = {
-      apiKey: config.aiApiKey,
+      baseUrl: config.ollamaBaseUrl,
       model: config.aiModel,
-      provider: config.aiProvider,
       temperature: 0.5,
-      siteName: "Blockish AI",
-      siteUrl: config.openRouterSiteUrl,
     };
     const agent = createProductManagerAgent({
       blockishOverviewContext,

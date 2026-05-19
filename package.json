@@ -15,15 +15,16 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@langchain/google": "^0.1.11",
-    "@langchain/openrouter": "^0.2.4",
+    "@langchain/ollama": "^1.2.7",
     "cors": "^2.8.6",
     "deepagents": "^1.10.2",
     "dotenv": "^17.4.2",
     "express": "^4.22.1",
     "helmet": "^8.1.0",
+    "langchain": "^1.4.1",
     "morgan": "^1.10.1",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
