@@ -1,11 +1,12 @@
-import { ChatOllama } from "@langchain/ollama";
+import { ChatOpenAI } from "@langchain/openai";
 
-export type CreateModelConfig = {
-  baseUrl: string;
+type ChatOpenAIConfig = NonNullable<ConstructorParameters<typeof ChatOpenAI>[0]>;
+
+export type CreateModelConfig = ChatOpenAIConfig & {
   model: string;
   temperature: number;
 };
 
 export function createModel(config: CreateModelConfig) {
-  return new ChatOllama(config);
+  return new ChatOpenAI(config);
 }
