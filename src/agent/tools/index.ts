@@ -26,7 +26,7 @@ type AskUserToolInput = {
 };
 
 type ReadBlockishOverviewToolInput = {
-  cursor?: number;
+  cursor?: number | null;
 };
 
 type SuggestMissingBlockToolInput = {
@@ -229,7 +229,10 @@ const readBlockishOverviewSchema = {
   type: "object",
   properties: {
     cursor: {
-      type: "number",
+      anyOf: [
+        { type: "number" },
+        { type: "null" },
+      ],
       description: "Chunk cursor returned by the previous call. Omit this for the first overview chunk.",
     },
   },

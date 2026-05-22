@@ -315,7 +315,10 @@ async function invokeAgentResponseInner(
         }
 
         streamedMessage += token;
-        await events.onDelta(token);
+        await events.onDelta(token, {
+          agent: "product_manager",
+          source: "assistant_message",
+        });
       }
     }
 

@@ -172,7 +172,11 @@ function handleConnection(socket: WebSocket): void {
       getRequestBody(message),
       abortController.signal,
       {
-        onDelta: (delta) => {
+        onDelta: (delta, metadata) => {
+          if (metadata?.source && metadata.source !== "assistant_message") {
+            return;
+          }
+
           const answerDelta = answerReader.read(delta);
 
           if (!answerDelta) {

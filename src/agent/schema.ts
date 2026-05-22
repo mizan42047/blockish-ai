@@ -318,6 +318,9 @@ function isUsableImageUrl(value: unknown): value is string {
       "example.net",
       "yourdomain.com",
       "localhost",
+      "via.placeholder.com",
+      "placehold.co",
+      "blockish.io",
     ].includes(hostname);
   } catch {
     return false;

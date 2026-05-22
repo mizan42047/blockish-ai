@@ -12,6 +12,7 @@ import {
   createModel,
   type CreateModelConfig,
 } from "agent/utility/create-model.js";
+import { extractAgentStructuredOutput } from "agent/utility/agent-output.js";
 import { createToolEventMiddleware } from "agent/utility/tool-event-middleware.js";
 
 export type CreateDesignerToolInput = {
@@ -85,6 +86,90 @@ function normalizeDesignerResponse(value: unknown): DesignerResponse | null {
   return parsed.success ? parsed.data : null;
 }
 
+function createDesignerFallbackResponse(
+  brief: string,
+  context?: string
+): DesignerResponse {
+  const lowerBrief = brief.toLowerCase();
+  const sectionType = lowerBrief.includes("team")
+    ? "team"
+    : lowerBrief.includes("faq") || lowerBrief.includes("question")
+      ? "FAQ"
+      : lowerBrief.includes("pricing")
+        ? "pricing"
+        : lowerBrief.includes("hero")
+          ? "hero"
+          : "content";
+  const structure = sectionType === "team"
+    ? [
+      "Intro eyebrow or compact label.",
+      "Strong heading focused on expertise and trust.",
+      "Short supporting copy.",
+      "Three trainer/member cards with portrait, name, role, specialty, and short bio.",
+      "Primary CTA below the cards.",
+    ]
+    : sectionType === "FAQ"
+      ? [
+        "Section heading and short reassurance copy.",
+        "Accordion list with four to six focused questions.",
+        "Small CTA or helper link after the accordion.",
+      ]
+      : sectionType === "pricing"
+        ? [
+          "Section heading with value-focused intro.",
+          "Three pricing cards with one highlighted plan.",
+          "Feature bullets, price, and CTA per card.",
+        ]
+        : sectionType === "hero"
+          ? [
+            "Split hero with copy stack and media stack.",
+            "Headline, subheadline, primary CTA, secondary proof detail.",
+            "Visual preview area using image/video when available.",
+          ]
+          : [
+            "Focused heading and supporting copy.",
+            "Reusable content/card layout.",
+            "Clear CTA or next action.",
+          ];
+
+  return {
+    brief: [
+      "## Design Intent",
+      `Create a polished ${sectionType} section from the request: ${brief}`,
+      context ? `Additional context: ${context}` : "",
+      "",
+      "## Structure",
+      ...structure.map((item) => `- ${item}`),
+      "",
+      "## Visual Style",
+      "- Modern, confident, and useful rather than decorative.",
+      "- Strong spacing rhythm with clear hierarchy between intro, content, and CTA.",
+      "- Use real imagery when available; otherwise use a safe placeholder that can be replaced in the editor.",
+      "",
+      "## Class Manager Plan",
+      "- Create reusable classes for section wrapper, card, heading, text, button, and image/media.",
+      "- Prefer class references over repeated inline styles.",
+      "- Keep class names lowercase kebab-case.",
+      "",
+      "## Responsive Notes",
+      "- Stack content on mobile.",
+      "- Keep cards readable with comfortable gaps.",
+      "- Ensure buttons are easy to tap.",
+      "",
+      "## Implementation Notes",
+      "- Build with existing Blockish blocks.",
+      "- Use Container for layout and cards.",
+      "- Use Heading as paragraph text when needed.",
+      "- Use Image and Button blocks where the section requires media and CTA.",
+    ].filter(Boolean).join("\n"),
+    assets: {
+      icons: [],
+      images: [],
+      videos: [],
+    },
+  };
+}
+
 function createDesignerSystemPrompt(): string {
   return [
     "You are the Blockish Designer subagent.",
@@ -154,18 +239,22 @@ export function createDesignerTool(input: CreateDesignerToolInput) {
           },
         ],
       });
-      const output = normalizeDesignerResponse(
-        (result as { structuredResponse?: unknown }).structuredResponse
+      const extracted = extractAgentStructuredOutput(
+        result,
+        normalizeDesignerResponse
       );
 
-      return JSON.stringify(output ?? {
-        brief: "Designer could not produce a structured design brief.",
-        assets: {
-          icons: [],
-          images: [],
-          videos: [],
-        },
-      });
+      if (!extracted.value) {
+        console.warn("[Blockish AI][designer:unparsed_output]", {
+          rawText: extracted.rawText,
+          structuredResponse: (result as { structuredResponse?: unknown })
+            .structuredResponse,
+        });
+      }
+
+      return JSON.stringify(
+        extracted.value ?? createDesignerFallbackResponse(brief, context)
+      );
     },
     {
       name: "designer",

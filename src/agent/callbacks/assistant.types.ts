@@ -90,7 +90,7 @@ export type AssistantMetrics = {
 };
 
 export type AssistantRunEvents = {
-  onDelta?: (delta: string) => void | Promise<void>;
+  onDelta?: (delta: string, metadata?: AssistantDeltaMetadata) => void | Promise<void>;
   onInterrupt?: (interrupt: AssistantInterrupt) => void | Promise<void>;
   onInteraction?: (
     interaction: AssistantInteraction,
@@ -99,6 +99,11 @@ export type AssistantRunEvents = {
   onStatus?: (message: string) => void | Promise<void>;
   onToolEnd?: (event: AssistantToolEvent) => void | Promise<void>;
   onToolStart?: (event: AssistantToolEvent) => void | Promise<void>;
+};
+
+export type AssistantDeltaMetadata = {
+  agent?: string;
+  source?: string;
 };
 
 export type AssistantInterrupt = {

@@ -287,6 +287,7 @@ Behavior:
 - The assistant callback does not send synthetic `plan` events; todo items come from the Product Manager structured response.
 - The assistant response parser first reads LangChain `structuredResponse`; it can still parse raw model text as a fallback and maps `answer` to chat content while keeping `reasoning` and `todo` as structured fields.
 - The assistant schema extractor recursively scans LangChain result objects and tool outputs for valid `BlockishGeneratedResponse` JSON so raw schema payloads are extracted into `schema.new` instead of rendered as chat text.
+- WebSocket delta streaming should only forward Product Manager assistant-message deltas. Tool/document JSON output must travel through `assistant.tool_end` debug events, never through chat deltas.
 - If developer schema generation fails or returns invalid JSON, the callback returns the agent chat response with `schema.new` as `null` so the failure is visible.
 - Assistant interaction buttons may currently be derived from structured `interaction`, explicit `**Options:**` model output, or backend heuristics, but this is fragile and should not be extended further as the primary solution.
 - When the developer tool returns valid JSON, the assistant callback can extract and validate `schema.new` from tool output and send it to the frontend.
