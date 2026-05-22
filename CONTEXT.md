@@ -7,7 +7,6 @@ Blockish AI is a Node.js 18+ TypeScript backend for storing Blockish page docume
 The app uses:
 
 - Express 4 for HTTP routing.
-- `ws` for the assistant WebSocket transport.
 - PostgreSQL through `pg`.
 - `pgvector`-style `VECTOR(1536)` storage for document embeddings.
 - ESM TypeScript with `module` and `moduleResolution` set to `NodeNext`.
@@ -17,7 +16,6 @@ There is no frontend in this repository.
 ## Entry Points
 
 - `src/index.ts` starts the server, calls `createTables()`, then listens on `config.port`.
-- `src/index.ts` also registers the assistant WebSocket transport on the same HTTP server.
 - `src/server.ts` builds the Express app, registers middleware, and owns all routes.
 - `src/config.ts` loads environment variables with `dotenv/config`.
 - `src/db.ts` exports the shared PostgreSQL pool.
@@ -26,11 +24,9 @@ There is no frontend in this repository.
 ## Required Environment
 
 - `DATABASE_URL` is required.
-- The assistant model uses LangChain `ChatOpenAI` against an OpenAI-compatible endpoint. Local testing points this at Ollama.
+- Ollama is the only configured assistant model provider for local testing.
 - `OLLAMA_MODEL` is optional and defaults to `qwen3:8b`.
-- `OLLAMA_BASE_URL` is optional and defaults to `http://localhost:11434/v1`.
-- `OPENAI_API_KEY` is optional and defaults to `ollama` for local Ollama testing.
-- `BLOCKISH_WS_AUTH_SECRET` signs and verifies assistant WebSocket auth tokens. It currently defaults to `blockish-local-dev-secret` for local development and should be overridden outside local testing.
+- `OLLAMA_BASE_URL` is optional and defaults to `http://localhost:11434`.
 - `PORT` is optional and defaults to `3000`.
 Example local database from `docker-compose.yml`:
 
@@ -211,15 +207,6 @@ Errors generally use:
 ### Assistant
 
 - `POST /assistant`
-  - Debug/compatibility transport.
-  - Returns plain JSON after the assistant run completes.
-
-- `WebSocket /assistant/ws`
-  - Direct assistant transport for long-running chat interactions.
-  - Requires a signed `token` query parameter before the WebSocket upgrade is accepted.
-  - Client sends `assistant.request` messages with the same body shape as `POST /assistant`.
-  - Client can send `assistant.cancel` with the same `requestId` to abort an active request.
-  - Server emits `assistant.started`, `assistant.status`, `assistant.final`, `assistant.done`, `assistant.error`, and `assistant.cancelled` events.
 
 Accepted body fields:
 
@@ -232,71 +219,55 @@ Accepted body fields:
 
 Behavior:
 
-- Uses `ChatOpenAI` from `@langchain/openai` against the configured OpenAI-compatible base URL.
-- Assistant callback orchestration stays in `src/agent/callbacks/assistant.callback.ts`.
-- Shared assistant execution lives in `src/agent/callbacks/assistant-runner.ts` so REST and WebSocket use the same request normalization and agent execution path.
-- WebSocket auth verification lives in `src/agent/callbacks/assistant-ws-auth.ts`.
-- WebSocket delta filtering lives in `src/agent/callbacks/assistant-delta.ts`; it extracts the Product Manager JSON `answer` field so raw structured JSON is not displayed in chat.
-- The assistant WebSocket transport lives in `src/agent/callbacks/assistant.websocket.ts`.
-- Assistant callback helper modules live beside it as `assistant-*.ts` files for request parsing, result parsing, context shaping, interaction parsing, model config, cached agent initialization, schema extraction, agent invocation, and shared types.
-- Runs the Product Manager agent first through LangChain `createAgent`.
-- The current Product Manager agent gathers requirements, answers questions, breaks work into a short todo list, shares concise public reasoning, and prepares the next useful product-management step.
-- The Product Manager uses a Zod schema with LangChain `providerStrategy` for `answer`, `reasoning`, `todo`, and `summary`. The PM prompt should describe behavior only, not the JSON output contract.
-- The Product Manager structured response also includes nullable `interaction`; backend should prefer this model-provided interaction over markdown parsing or heuristic inference.
-- Before changing LangChain agent orchestration, structured output, streaming, HITL, middleware, or tool-call behavior, verify the current official LangChain JavaScript documentation first and base recommendations on those docs.
-- Do not guess LangChain HITL behavior from memory. Current official LangChain JS HITL is middleware-driven tool-call interrupt/resume: use `humanInTheLoopMiddleware`, a checkpointer such as `MemorySaver` or a persistent saver, stable `thread_id`, and `Command({ resume })` decisions.
-- Real small-question human-in-the-loop uses the `ask_user` tool in `src/agent/tools/index.ts`. The Product Manager should call `ask_user` instead of writing clarification questions in the final answer.
-- The current installed LangChain HITL middleware supports `approve`, `edit`, and `reject` decision types. Until `respond` is available in the installed package, resume `ask_user` by sending an `edit` decision that keeps the tool name `ask_user` and adds the human answer to the edited tool args.
-- Treat final-response `interaction`, markdown `**Options:**` parsing, and heuristic interaction inference as temporary compatibility only; they are not the primary HITL design. If the model still writes a user question as a final response, the callback reroutes it as an `assistant.interrupt` instead of allowing the question to appear as a completed answer. Final-response question fallback should parse simple `e.g.` examples into choice buttons; otherwise it should use a text interaction.
-- Designer orchestration is wired into the main Product Manager `createAgent` flow as a LangChain subagent tool named `designer`.
-- Chat-compatible assistant responses include `message`, `metrics`, `reasoning`, `todo`, `summary`, and `schema: { prev, new }`.
+- Uses local Ollama through `@langchain/ollama`; no frontend or backend provider API key is required.
+- Runs the Product Manager first. When the model returns a DeepAgents `task` function call for the designer instead of completing the nested run, the callback completes the workflow itself:
+  - run designer from the ready product brief,
+  - return the Product Manager brief and designer guide in chat for debugging,
+  - skip developer/schema generation during the current design-debugging phase.
+- Chat-compatible assistant responses include `message`, `reasoning`, `summary`, and `schema: { prev, new }`.
 - Creates a LangChain model through `src/agent/utility/create-model.ts`.
-- `createModel()` accepts full `ChatOpenAI` config and passes it through without rebuilding or limiting constructor fields.
-- Product Manager LangChain agent creation lives in `src/agent/main-agent.ts`.
-- On the first assistant request, the backend caches the Product Manager agent for reuse without injecting the full Blockish overview document into the system prompt.
+- `createModel()` accepts Ollama config and creates a `ChatOllama` model.
+- Product Manager DeepAgent creation lives in `src/agent/main-agent.ts`.
+- On each assistant request, the backend loads the document whose title is `index` and injects its content as Blockish plugin overview context.
 - The Product Manager gathers requirements, asks focused questions, and prepares a page brief.
-- The Product Manager can answer Blockish plugin questions with the `read_blockish_overview` tool, which reads the `index` document only when Blockish context is needed.
-- `read_blockish_overview` chunks the overview with LangChain `RecursiveCharacterTextSplitter` and returns one chunk plus `nextCursor` at a time.
-- The designer subagent tool lives in `src/agent/subagents/designer-agent.ts`. It creates a focused `createAgent` designer and wraps it with a LangChain tool, following the official multi-agent subagents pattern.
-- The designer tool can use `read_blockish_overview`, `search_docs`, visual asset helpers, and `suggest_missing_block`; it returns JSON to the Product Manager with exactly `brief` and `assets`, where assets contains `icons`, `images`, and `videos`.
+- The Product Manager can answer Blockish plugin questions using the loaded `index` document context.
+- The Product Manager has a first subagent named `designer`.
+- The designer subagent lives in `src/agent/subagents/designer-agent.ts`, uses the same Blockish overview context, and runs with a more creative temperature for design-guide work.
+- The designer subagent has a `suggest_missing_block` tool from `src/agent/tools/index.ts`.
+- Visual asset helpers live in `src/agent/tools/index.ts`:
+  - `collect_image_assets` for image candidates and source links,
+  - `collect_video_assets` for video source searches,
+  - `collect_icon_assets` for Iconify/Lucide SVG icon candidates with inline SVG markup.
+- During design-debug mode, the callback collects a visual asset pack in backend code and injects it into the designer prompt instead of relying on model tool calls.
+- Designer guides should include an Assets section with concrete asset candidates, URLs/source links, placement, and visual purpose.
 - Blockish blocks accept SVG icons only; designer/developer outputs should use inline SVG for icons, not PNG, emoji, font icons, or icon names alone.
-- `suggest_missing_block` is available to the designer tool for future Blockish block ideas when an absent block would materially improve a design.
+- Use `suggest_missing_block` when the current Blockish block set can build the page, but one or two missing blocks would materially improve future design quality or reduce awkward composition.
 - Missing block suggestions are saved with upsert semantics in `block_suggestions`, keyed by normalized title and incrementing `mention_count`.
-- Developer orchestration is wired into the main Product Manager `createAgent` flow as a LangChain subagent tool named `developer`.
-- The developer subagent tool lives in `src/agent/subagents/developer-agent.ts`. It creates a focused low-temperature `createAgent` developer and wraps it with a LangChain tool.
-- The developer tool converts Product Manager briefs, approved Designer briefs, and Designer assets into buildable Blockish/Gutenberg schemas without inventing unsupported blocks, attributes, or extension data.
-- Before running the developer model, the developer tool automatically loads relevant docs from the `documents` table based on the brief/design/assets. It always includes Index, Class Manager, Container, and Heading when available, then adds request-relevant block docs such as Accordion for FAQ or Image for team/gallery work.
+- The Product Manager does not delegate to the developer during the current design-debugging phase.
+- The developer subagent exists but is not wired into the Product Manager while designer output is being debugged.
+- The Product Manager has a second subagent named `developer` for schema generation when debugging mode is removed.
+- The developer subagent lives in `src/agent/subagents/developer-agent.ts`, uses the same Blockish overview context, and runs with low temperature for implementation/schema work.
+- The developer subagent should convert briefs and design guides into buildable Blockish/Gutenberg schemas without inventing unsupported blocks, attributes, or extension data.
 - Generated schema validation lives in `src/agent/schema.ts`.
-- Schema validation rejects unsupported `blockish/*` block names and explicitly rejects `blockish/paragraph`; text/paragraph content should be represented with `blockish/heading` configured as paragraph-style text.
 - Developer output is parsed and validated against `BlockishGeneratedResponse`; if invalid, the callback asks the developer for one repair attempt before returning.
 - Final generated schema uses `schema.new.extensions` and `schema.new.blocks`.
 - `schema.new.extensions.classManager` contains Class Manager create/update operations.
 - The developer should search the Class Manager documentation before creating/updating global classes, inspect existing request-provided classes, reuse matching classes, create reusable missing classes, and edit existing global classes only when safe or explicitly requested.
 - The developer subagent has a `search_block_docs` tool from `src/agent/tools/index.ts`.
 - The developer should call `search_block_docs` with a block name before drafting schema for that specific Blockish block.
-- The Product Manager should ask exactly one focused next question only when missing information would seriously change the result.
-- The Product Manager should proceed with reasonable assumptions when the user does not want to answer more questions.
-- The assistant callback reuses the cached Product Manager agent, then invokes LangChain `createAgent` and returns plain JSON.
-- The WebSocket transport reuses the same cached Product Manager agent and returns the same final chat-compatible data in `assistant.final`.
-- The WebSocket transport rejects upgrade requests with missing, invalid, or expired signed auth tokens.
-- The WebSocket transport sends live `assistant.status`, `assistant.tool_start`, `assistant.tool_end`, `assistant.interrupt`, `assistant.interaction`, and `assistant.delta` events while the final normalized response is returned in `assistant.final`.
-- Tool call notification middleware lives in `src/agent/utility/tool-event-middleware.ts`. Product Manager and Designer agents use it to emit request-scoped tool start/end notifications, including agent name, tool name, input, duration, status, and normalized output for frontend debugging.
-- The same middleware includes request-scoped circuit breakers. Product Manager can call `designer` at most once and `developer` at most once per request; the developer tool handles its own internal one-repair attempt.
-- `assistant.interrupt` is emitted from LangChain HITL interrupts. The frontend should render its interaction payload, then resume the same chat/thread with the user's answer.
-- The assistant callback sends every valid request through the Product Manager agent; it does not use hardcoded greeting or direct-build shortcuts.
-- The assistant callback does not send synthetic `plan` events; todo items come from the Product Manager structured response.
-- The assistant response parser first reads LangChain `structuredResponse`; it can still parse raw model text as a fallback and maps `answer` to chat content while keeping `reasoning` and `todo` as structured fields.
-- The assistant schema extractor recursively scans LangChain result objects and tool outputs for valid `BlockishGeneratedResponse` JSON so raw schema payloads are extracted into `schema.new` instead of rendered as chat text.
-- WebSocket delta streaming should only forward Product Manager assistant-message deltas. Tool/document JSON output must travel through `assistant.tool_end` debug events, never through chat deltas.
-- If developer schema generation fails or returns invalid JSON, the callback returns the agent chat response with `schema.new` as `null` so the failure is visible.
-- Assistant interaction buttons may currently be derived from structured `interaction`, explicit `**Options:**` model output, or backend heuristics, but this is fragile and should not be extended further as the primary solution.
-- When the developer tool returns valid JSON, the assistant callback can extract and validate `schema.new` from tool output and send it to the frontend.
+- For now, the Product Manager should ask exactly one focused next question when more information is needed.
+- The Product Manager should not produce a brief until page type, goal, product/business, target audience, and primary CTA are known.
+- The assistant callback creates the Product Manager with the configured Ollama model and `temperature: 0.5`, then streams normalized messages through DeepAgents.
+- The assistant callback can bypass the Product Manager when a section/page request already has enough conversation context, then run designer and developer directly to produce `schema.new`.
+- If developer schema generation fails or returns invalid JSON, the callback returns a minimal valid Blockish schema fallback instead of leaving `schema.new` empty.
+- Assistant interaction buttons are derived from explicit `**Options:**` model output or inferred by backend heuristics for common questions such as gym type, primary CTA/goal, target audience, and yes/no.
+- When the Product Manager delegates to the designer, the callback returns both the Product Manager brief sent to the designer and the designer guide as the final chat message, leaving `schema.new` as `null`.
+- If the Product Manager returns a ready page brief without a `designer` task call, the callback treats that brief as designer input and continues the design-debug flow.
 - Subagent text extraction combines assistant text messages so tool calls do not cause partial designer output to be returned.
 - Image attachments are converted into multimodal content on the latest user message before the agent run.
-- The REST assistant currently returns plain JSON instead of streaming SSE.
-- Valid assistant JSON responses contain chat-compatible data: `{ ok: true, data: { message, metrics, reasoning, todo, summary, schema: { prev, new }, interaction? } }`.
-- Assistant response metrics include `durationMs`, `inputTokens`, `outputTokens`, `totalTokens`, and `estimatedTokens` when provider token usage is unavailable.
-- Quick-choice fallback should stay conservative. It patches final-response question leaks by turning simple `e.g.` examples into choices, with a small CTA/button option set for CTA questions.
+- Valid assistant responses use Server-Sent Events with `delta`, `final`, `done`, and `error` events.
+- The `final` event contains chat-compatible data: `{ message, summary, schema: { prev, new }, interaction? }`.
+- Quick-choice `interaction` generation is disabled during provider testing because hardcoded heuristic options can mismatch the actual model question.
 
 ### Block Suggestions
 
@@ -394,9 +365,7 @@ Contains request-shape middleware for document endpoints:
 
 ### `src/agent/callbacks/assistant.callback.ts`
 
-Owns the lean `POST /assistant` callback orchestration: request normalization,
-agent execution, JSON response writing, and final error
-handling.
+Contains the empty placeholder callback for `POST /assistant`.
 
 ### `src/types.ts`
 

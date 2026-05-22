@@ -1,9 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
-import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { tool } from "langchain";
 import { config } from "config.js";
-import { getBlockishOverviewContext } from "agent/context/document-context.js";
 import { getDocuments } from "routes/document.ropository.js";
 import { upsertBlockSuggestion } from "routes/block-suggestions.repository.js";
 
@@ -15,18 +13,6 @@ type SearchBlockDocsToolInput = {
 type SearchDocsToolInput = {
   limit?: number;
   query: string;
-};
-
-type AskUserToolInput = {
-  allowCustom?: boolean;
-  answer?: string;
-  interactionType?: "multi_choice" | "single_choice" | "text" | "yes_no";
-  options?: { label: string; value: string }[];
-  question: string;
-};
-
-type ReadBlockishOverviewToolInput = {
-  cursor?: number | null;
 };
 
 type SuggestMissingBlockToolInput = {
@@ -71,13 +57,6 @@ type FontAwesomeIcon = {
 const FA_ICONS_URL = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/refs/heads/7.x/metadata/icons.json";
 const FA_CACHE_PATH = join(process.cwd(), ".cache", "fa-icons.json");
 const FA_STYLE_PREFERENCE = ["solid", "regular", "brands", "thin", "light"];
-const BLOCKISH_OVERVIEW_CHUNK_SIZE = 3500;
-const BLOCKISH_OVERVIEW_CHUNK_OVERLAP = 200;
-
-const blockishOverviewTextSplitter = new RecursiveCharacterTextSplitter({
-  chunkSize: BLOCKISH_OVERVIEW_CHUNK_SIZE,
-  chunkOverlap: BLOCKISH_OVERVIEW_CHUNK_OVERLAP,
-});
 
 let faIconsCache: Record<string, FontAwesomeIcon> | null = null;
 
@@ -187,58 +166,6 @@ const searchDocsSchema = {
   additionalProperties: false,
 } as const;
 
-const askUserSchema = {
-  type: "object",
-  properties: {
-    question: {
-      type: "string",
-      description: "The single focused question to ask the user.",
-    },
-    interactionType: {
-      type: "string",
-      enum: ["single_choice", "multi_choice", "yes_no", "text"],
-      description: "The kind of UI control the frontend should render.",
-    },
-    options: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          label: { type: "string" },
-          value: { type: "string" },
-        },
-        required: ["label", "value"],
-        additionalProperties: false,
-      },
-      description: "Choice options for single_choice, multi_choice, or yes_no interactions.",
-    },
-    allowCustom: {
-      type: "boolean",
-      description: "Whether the user can type a custom answer.",
-    },
-    answer: {
-      type: "string",
-      description: "Human answer supplied when the interrupted ask_user tool is resumed.",
-    },
-  },
-  required: ["question"],
-  additionalProperties: false,
-} as const;
-
-const readBlockishOverviewSchema = {
-  type: "object",
-  properties: {
-    cursor: {
-      anyOf: [
-        { type: "number" },
-        { type: "null" },
-      ],
-      description: "Chunk cursor returned by the previous call. Omit this for the first overview chunk.",
-    },
-  },
-  additionalProperties: false,
-} as const;
-
 const collectImageAssetsSchema = {
   type: "object",
   properties: {
@@ -320,18 +247,6 @@ function truncateContent(content: string, maxLength = 5000) {
   }
 
   return `${content.slice(0, maxLength)}\n...[truncated]`;
-}
-
-function getChunkCursor(value: unknown, chunkCount: number) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 0;
-  }
-
-  return Math.max(0, Math.min(Math.max(0, chunkCount - 1), Math.floor(value)));
-}
-
-async function splitTextIntoChunks(content: string) {
-  return blockishOverviewTextSplitter.splitText(content);
 }
 
 function normalizeKeywords(keywords: unknown): string[] {
@@ -632,69 +547,6 @@ export function createSearchDocsTool() {
       name: "search_docs",
       description: "Search Blockish documentation by any query, including extension docs such as Class Manager.",
       schema: searchDocsSchema,
-    }
-  );
-}
-
-export function createAskUserTool() {
-  return tool(
-    async (input) => {
-      const askInput = input as AskUserToolInput;
-
-      if (typeof askInput.answer === "string" && askInput.answer.trim()) {
-        return `User answered: ${askInput.answer.trim()}`;
-      }
-
-      return JSON.stringify({
-        question: askInput.question,
-        interactionType: askInput.interactionType ?? "text",
-        options: askInput.options ?? [],
-        allowCustom: askInput.allowCustom ?? true,
-      });
-    },
-    {
-      name: "ask_user",
-      description: "Ask the user one focused question when required information is missing. This tool is paused for human input by HITL middleware.",
-      schema: askUserSchema,
-    }
-  );
-}
-
-export function createReadBlockishOverviewTool() {
-  return tool(
-    async (input) => {
-      const overview = await getBlockishOverviewContext();
-      const trimmedOverview = overview.trim();
-
-      if (!trimmedOverview) {
-        return "No Blockish overview document was found in the database.";
-      }
-
-      const chunks = await splitTextIntoChunks(trimmedOverview);
-
-      if (!chunks.length) {
-        return "No Blockish overview document content was available after chunking.";
-      }
-
-      const readInput = input as ReadBlockishOverviewToolInput;
-      const cursor = getChunkCursor(readInput.cursor, chunks.length);
-      const nextCursor = cursor + 1 < chunks.length ? cursor + 1 : null;
-
-      return JSON.stringify({
-        documentTitle: "index",
-        cursor,
-        nextCursor,
-        hasMore: nextCursor !== null,
-        instruction: nextCursor === null
-          ? "This is the last overview chunk."
-          : "If this chunk answers the question, stop reading. Only call this tool again with nextCursor when the answer is still missing.",
-        content: chunks[cursor],
-      });
-    },
-    {
-      name: "read_blockish_overview",
-      description: "Read the Blockish plugin overview document in chunks. Start without a cursor, then continue with nextCursor only if the previous chunk was not enough.",
-      schema: readBlockishOverviewSchema,
     }
   );
 }

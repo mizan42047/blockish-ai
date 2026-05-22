@@ -191,10 +191,7 @@ export async function getDocumentByTitle(
     `
     SELECT *
     FROM documents
-    WHERE lower(title) = lower($1)
-    ORDER BY
-      CASE WHEN title = $1 THEN 0 ELSE 1 END,
-      updated_at DESC
+    WHERE title = $1
     LIMIT 1;
     `,
     [title]

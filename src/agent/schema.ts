@@ -107,28 +107,6 @@ const defaultClassManagerCreates: BlockishClassManagerCreate[] = [
   },
 ];
 
-const supportedBlockNames = new Set([
-  "blockish/accordion",
-  "blockish/accordion-item",
-  "blockish/button",
-  "blockish/container",
-  "blockish/counter",
-  "blockish/google-map",
-  "blockish/heading",
-  "blockish/icon",
-  "blockish/icon-list",
-  "blockish/icon-list-item",
-  "blockish/image",
-  "blockish/progress-bar",
-  "blockish/progress-bar-item",
-  "blockish/rating",
-  "blockish/social-icons",
-  "blockish/social-icons-item",
-  "blockish/tab",
-  "blockish/tab-item",
-  "blockish/video",
-]);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -253,13 +231,6 @@ function validateBlock(
 
   if (typeof block.name !== "string" || !block.name.trim()) {
     errors.push(`${path}.name must be a non-empty string.`);
-  } else if (block.name === "blockish/paragraph") {
-    errors.push(`${path}.name must not be blockish/paragraph. Use blockish/heading with paragraph-style attributes instead.`);
-  } else if (
-    block.name.startsWith("blockish/") &&
-    !supportedBlockNames.has(block.name)
-  ) {
-    errors.push(`${path}.name uses unsupported Blockish block ${block.name}.`);
   }
 
   if (!isRecord(block.attributes)) {
@@ -318,9 +289,6 @@ function isUsableImageUrl(value: unknown): value is string {
       "example.net",
       "yourdomain.com",
       "localhost",
-      "via.placeholder.com",
-      "placehold.co",
-      "blockish.io",
     ].includes(hostname);
   } catch {
     return false;
