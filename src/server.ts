@@ -19,6 +19,10 @@ import {
 } from "routes/block-suggestions.repository.js";
 import { assistantCallback } from "agent/callbacks/assistant.callback.js";
 import {
+  runDesignerDebug,
+  runDeveloperDebug,
+} from "agent/debug-subagent-runner.js";
+import {
   requireDocumentSourceId,
   requireDocumentsPayload,
   requireSourceIdsPayload,
@@ -55,6 +59,10 @@ class AppServer {
     this.app.get("/health", this.healthCallback);
     this.app.get("/test-db", this.testDbCallback);
     this.app.post("/assistant", assistantCallback);
+    this.app.get("/assistant/debug/designer", this.debugDesignerCallback);
+    this.app.post("/assistant/debug/designer", this.debugDesignerCallback);
+    this.app.get("/assistant/debug/developer", this.debugDeveloperCallback);
+    this.app.post("/assistant/debug/developer", this.debugDeveloperCallback);
     this.app.get("/block-suggestions", this.getBlockSuggestionsCallback);
     this.app.get("/documents", this.getDocumentsCallback);
     this.app.get("/documents/:sourceId", this.getDocumentCallback);
@@ -79,6 +87,40 @@ class AppServer {
       });
     } catch (error) {
       res.status(500).json({ error: "Table not found" });
+    }
+  };
+
+  private debugDesignerCallback = async (req: Request, res: Response) => {
+    try {
+      const result = await runDesignerDebug({
+        ...req.query,
+        ...(req.body ?? {}),
+      });
+
+      res.json({ ok: true, data: result });
+    } catch (error) {
+      console.error("[Blockish AI][debug:designer:error]", error);
+      res.status(500).json({
+        ok: false,
+        error: "Designer debug run failed",
+      });
+    }
+  };
+
+  private debugDeveloperCallback = async (req: Request, res: Response) => {
+    try {
+      const result = await runDeveloperDebug({
+        ...req.query,
+        ...(req.body ?? {}),
+      });
+
+      res.json({ ok: true, data: result });
+    } catch (error) {
+      console.error("[Blockish AI][debug:developer:error]", error);
+      res.status(500).json({
+        ok: false,
+        error: "Developer debug run failed",
+      });
     }
   };
 
