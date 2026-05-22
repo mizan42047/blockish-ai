@@ -69,8 +69,6 @@ export async function runAssistantRequest(
     body.interactionResponse
   );
 
-  console.log(response);
-
   return {
     ...response,
     metrics: {
