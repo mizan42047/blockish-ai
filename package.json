@@ -15,7 +15,10 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.48",
     "@langchain/ollama": "^1.2.7",
+    "@langchain/openai": "^1.4.7",
+    "axios": "^1.16.1",
     "cors": "^2.8.6",
     "deepagents": "^1.10.2",
     "dotenv": "^17.4.2",
@@ -23,7 +26,9 @@
     "helmet": "^8.1.0",
     "langchain": "^1.4.1",
     "morgan": "^1.10.1",
+    "ollama": "^0.6.3",
     "pg": "^8.20.0",
+    "socket.io": "^4.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

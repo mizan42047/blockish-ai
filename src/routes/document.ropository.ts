@@ -25,6 +25,7 @@ export type GetDocumentsOptions = {
   category?: string;
   sourceIds?: number[];
   search?: string;
+  onlySearchTitle?: boolean;
   updatedAfter?: Date;
   updatedBefore?: Date;
   limit?: number;
@@ -125,7 +126,12 @@ export async function getDocuments(
   if (options.search?.trim()) {
     values.push(`%${options.search.trim()}%`);
     const p = `$${values.length}`;
-    where.push(`(title ILIKE ${p} OR content ILIKE ${p})`);
+
+    where.push(
+      options.onlySearchTitle === true
+        ? `title ILIKE ${p}`
+        : `(title ILIKE ${p} OR content ILIKE ${p})`
+    );
   }
 
   addWhere("updated_at >= ?", options.updatedAfter);
