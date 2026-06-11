@@ -12,15 +12,12 @@ function getEnv(key: string, defaultValue?: string): string {
 }
 
 function getOptionalEnv(key: string): string | undefined {
-  const value = process.env[key]?.trim();
-
-  return value || undefined;
+  return process.env[key]?.trim() || undefined;
 }
 
 export const config = {
   port: Number(getEnv("PORT", "3000")),
   databaseUrl: getEnv("DATABASE_URL"),
-  aiModel: getEnv("OLLAMA_MODEL", "qwen3:8b"),
+  model: getEnv("AI_MODEL", "gemma4:12b"),
   ollamaBaseUrl: getOptionalEnv("OLLAMA_BASE_URL") ?? "http://localhost:11434",
-  pexelsApiKey: getOptionalEnv("PEXELS_API_KEY"),
 };

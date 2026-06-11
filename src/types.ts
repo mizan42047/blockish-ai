@@ -26,6 +26,7 @@ export type GetDocumentsQuery = {
   category?: string;
   sourceIds?: number[];
   search?: string;
+  onlySearchTitle?: string;
   updatedAfter?: string;
   updatedBefore?: string;
   limit?: string;

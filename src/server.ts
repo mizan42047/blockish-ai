@@ -17,7 +17,6 @@ import {
   getBlockSuggestions,
   type GetBlockSuggestionsOptions,
 } from "routes/block-suggestions.repository.js";
-import { assistantCallback } from "agent/callbacks/assistant.callback.js";
 import {
   requireDocumentSourceId,
   requireDocumentsPayload,
@@ -30,6 +29,8 @@ import type {
   NormalizedDocumentOk,
 } from "types.js";
 import { isNonEmptyString, parseDate, parseNumber } from "utils.js";
+import developerCallbacks from "assistant/callbacks/developer.callbacks.js";
+import productManagerAgent from "assistant/agents/product-manager.js";
 
 class AppServer {
   private readonly app: Express;
@@ -54,12 +55,15 @@ class AppServer {
   private registerRoutes() {
     this.app.get("/health", this.healthCallback);
     this.app.get("/test-db", this.testDbCallback);
-    this.app.post("/assistant", assistantCallback);
     this.app.get("/block-suggestions", this.getBlockSuggestionsCallback);
     this.app.get("/documents", this.getDocumentsCallback);
     this.app.get("/documents/:sourceId", this.getDocumentCallback);
+
     this.app.post("/documents", requireDocumentSourceId, this.upsertDocumentCallback);
     this.app.post("/documents/batch", requireDocumentsPayload, this.upsertDocumentsBatchCallback);
+    this.app.post("/developer", developerCallbacks);
+    this.app.post("/product-manager", this.productManagerCallback);
+
     this.app.delete("/documents/:sourceId", this.deleteDocumentCallback);
     this.app.delete("/documents/batch", requireSourceIdsPayload, this.deleteDocumentsBatchCallback);
     this.app.put("/options/:optionKey", this.upsertOptionCallback);
@@ -93,6 +97,7 @@ class AppServer {
         category: query.category,
         sourceIds: query.sourceIds,
         search: query.search,
+        onlySearchTitle: query.onlySearchTitle === "true",
         updatedAfter: parseDate(query.updatedAfter),
         updatedBefore: parseDate(query.updatedBefore),
         limit: parseNumber(query.limit),
@@ -127,8 +132,8 @@ class AppServer {
           : undefined,
         orderBy:
           query.orderBy === "mention_count" ||
-          query.orderBy === "updated_at" ||
-          query.orderBy === "created_at"
+            query.orderBy === "updated_at" ||
+            query.orderBy === "created_at"
             ? query.orderBy
             : undefined,
         priority: query.priority,
@@ -405,6 +410,18 @@ class AppServer {
       res.json({ ok: true, data: row });
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to upsert option" });
+    }
+  };
+
+  private productManagerCallback = async (req: Request, res: Response) => {
+    try {
+      const { message, answers } = req.body ?? {};
+      if (!message) return res.status(400).json({ ok: false, error: "message is required" });
+      const result = await productManagerAgent().runHttp(message, answers ?? []);
+      res.json({ ok: true, data: result });
+    } catch (error) {
+      console.error("[product-manager]", error);
+      res.status(500).json({ ok: false, error: "Failed to run product manager" });
     }
   };
 
