@@ -30,6 +30,7 @@ import type {
 } from "types.js";
 import { isNonEmptyString, parseDate, parseNumber } from "utils.js";
 import developerCallbacks from "assistant/callbacks/developer.callbacks.js";
+import productManagerAgent from "assistant/agents/product-manager.js";
 
 class AppServer {
   private readonly app: Express;
@@ -61,6 +62,7 @@ class AppServer {
     this.app.post("/documents", requireDocumentSourceId, this.upsertDocumentCallback);
     this.app.post("/documents/batch", requireDocumentsPayload, this.upsertDocumentsBatchCallback);
     this.app.post("/developer", developerCallbacks);
+    this.app.post("/product-manager", this.productManagerCallback);
 
     this.app.delete("/documents/:sourceId", this.deleteDocumentCallback);
     this.app.delete("/documents/batch", requireSourceIdsPayload, this.deleteDocumentsBatchCallback);
@@ -408,6 +410,18 @@ class AppServer {
       res.json({ ok: true, data: row });
     } catch (error) {
       res.status(500).json({ ok: false, error: "Failed to upsert option" });
+    }
+  };
+
+  private productManagerCallback = async (req: Request, res: Response) => {
+    try {
+      const { message, answers } = req.body ?? {};
+      if (!message) return res.status(400).json({ ok: false, error: "message is required" });
+      const result = await productManagerAgent().runHttp(message, answers ?? []);
+      res.json({ ok: true, data: result });
+    } catch (error) {
+      console.error("[product-manager]", error);
+      res.status(500).json({ ok: false, error: "Failed to run product manager" });
     }
   };
 

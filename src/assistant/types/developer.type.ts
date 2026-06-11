@@ -1,27 +1,28 @@
-import { createModel } from "assistant/utils/model.js";
-import { z } from "zod";
-
-import {
-	DeveloperResponseSchema,
-	DeveloperInputSchema,
-} from "assistant/schema/developer.schema.js";
-
-export type DeveloperModelConfig = Parameters<typeof createModel>[0];
-
-export type DeveloperOptions = {
-	modelConfig?: DeveloperModelConfig;
-	toolName?: string;
-	toolDescription?: string;
-	systemPrompt?: string;
+export type DeveloperInput = {
+	designGuideline: string;
+	assets: {
+		icons: Record<string, string>;
+		images: Record<string, string>;
+		videos: Record<string, string>;
+	};
+	classManager?: Array<{
+		id: number;
+		title: string;
+		attributes?: Record<string, unknown>;
+		parent?: number;
+	}>;
 };
 
-export type DeveloperConfig = {
-	model: ReturnType<typeof createModel>;
-	tools: [];
-	systemPrompt: string;
-	responseFormat: typeof DeveloperResponseSchema;
+type Block = {
+	name: string;
+	attributes: Record<string, unknown>;
+	innerBlocks: Block[];
 };
 
-export type DeveloperInput =  z.infer<typeof DeveloperInputSchema>;
-
-export type DeveloperResult = z.infer<typeof DeveloperResponseSchema>;
+export type DeveloperResult = {
+	summary: string;
+	schema: {
+		extensions: Record<string, unknown>;
+		blocks: Block[];
+	};
+};

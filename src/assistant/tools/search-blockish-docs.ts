@@ -1,44 +1,32 @@
+import { tool } from "langchain";
+import { z } from "zod";
 import axios from "axios";
 
-export const searchBlockishDocsTool = {
-    type: "function",
-    function: {
-        name: "search_blockish_docs",
-        description: "Search the Blockish documentation for relevant information based on the provided query. This tool can be used to find specific details about Blockish Blocks, Extensions, or other related topics. The query should be concise and focused on what you want to find in the documentation.",
-        parameters: {
-            type: "object",
-            properties: {
-                query: {
-                    type: "string",
-                    description: "Search by Blockish Block, Extension, or other relevant keywords.",
-                },
-            },
-            required: ["query"],
-        },
+const searchBlockishDocs = tool(
+    async ({ queries }) => {
+        console.log(`[search-blockish-docs] batch: ${queries.join(", ")}`);
+        const results = await Promise.all(
+            queries.map(async (query) => {
+                try {
+                    const response = await axios.get(
+                        `http://localhost:3000/documents?search=${encodeURIComponent(query)}&limit=1&onlySearchTitle=true`
+                    );
+                    const content = response?.data?.data?.[0]?.content ?? `No documentation found for: ${query}`;
+                    return `### ${query}\n${content}`;
+                } catch {
+                    return `### ${query}\nUnable to fetch documentation.`;
+                }
+            })
+        );
+        return results.join("\n\n");
     },
-} as const;
-
-export async function searchBlockishDocsExecutor(input: { query: string }) {
-    try {
-        console.log("Searching Blockish docs with query:", input.query);
-        const response = await axios.get(
-            "http://localhost:3000/documents?search=" +
-            encodeURIComponent(input.query) +
-            "&limit=1&onlySearchTitle=true"
-        );
-
-        return (
-            response?.data?.data?.[0]?.content || "No relevant documentation found for the query: " + input.query
-        );
-    } catch (error) {
-        console.error("Error fetching Blockish docs:", error);
-        return "Unable to fetch Blockish documentation at this time.";
+    {
+        name: "search_blockish_docs",
+        description: "Search Blockish documentation for multiple blocks at once. Pass all block names you need in a single call to fetch their schemas and rules in parallel.",
+        schema: z.object({
+            queries: z.array(z.string()).describe("List of block names or keywords to search for (e.g. ['Heading', 'Container', 'Accordion'])"),
+        }),
     }
-}
-
-const searchBlockishDocs = {
-    tool: searchBlockishDocsTool,
-    execute: searchBlockishDocsExecutor,
-};
+);
 
 export default searchBlockishDocs;
